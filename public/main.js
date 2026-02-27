@@ -556,14 +556,21 @@ currentStoryTitle.addEventListener('blur', async () => {
 closeStoryBtn.addEventListener('click', () => {
   state.currentStory = null;
   state.storyData = null;
+  // ensure we are not in full view anymore so rendered tags won't be re-applied
+  state.currentView = { type: 'text', name: null };
   currentStoryTitle.textContent = 'No story opened';
   editor.value = '';
+  // clear preview so any rendered tags/pills are removed when closing
+  if (preview) preview.innerHTML = '';
   if (highlightList) highlightList.innerHTML = '';
   // hide highlights area when no story is open
   if (highlightSection) highlightSection.style.display = 'none';
   if (newHighlightInput) newHighlightInput.value = '';
   // hide tiles area
   if (tilesSection) tilesSection.style.display = 'none';
+  // remove story-level tags container if present
+  const storyTagsEl = document.getElementById('storyTags');
+  if (storyTagsEl && storyTagsEl.parentNode) storyTagsEl.parentNode.removeChild(storyTagsEl);
   // disable editor area when no story is open
   setEditorEnabled(false);
   // refresh the stories list so the left menu updates (non-open stories appear grey)

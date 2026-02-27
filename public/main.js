@@ -1732,5 +1732,29 @@ preview.addEventListener('contextmenu', (ev) => {
  // hide highlights until a story is opened
  if (highlightSection) highlightSection.style.display = 'none';
 
+(function() {
+  // ensure #tag pills are rendered any time the preview DOM is updated while viewing the full concatenated tiles.
+  // This is more robust than trying to call renderTags at every injection site.
+  try {
+    if (typeof MutationObserver !== 'undefined' && preview) {
+      const mo = new MutationObserver((mutations) => {
+        try {
+          if (state.currentView && state.currentView.type === 'full') {
+            // render tags in the preview whenever its children change
+            renderTags(preview);
+          }
+        } catch (err) {
+          console.warn('preview MutationObserver handler error', err);
+        }
+      });
+      mo.observe(preview, { childList: true, subtree: true });
+      // expose so tests or cleanup can disconnect if necessary
+      window._previewMutationObserver = mo;
+    }
+  } catch (e) {
+    console.warn('init preview MutationObserver failed', e);
+  }
+})();
+
 // expose for debugging
 window._storyWriter = { state, refreshStories, openStory, saveMainText };

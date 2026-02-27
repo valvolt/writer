@@ -35,7 +35,8 @@ function ensureStoryStructure(name) {
   if (!fs.existsSync(base)) {
     fs.mkdirSync(base, { recursive: true });
   }
-  const files = ['text.md', 'highlights.md'];
+  // we no longer generate a top-level text.md file; highlights.md remains
+  const files = ['highlights.md'];
   for (const f of files) {
     const fp = path.join(base, f);
     if (!fs.existsSync(fp)) {
@@ -43,9 +44,9 @@ function ensureStoryStructure(name) {
     }
   }
 
-  // create images subfolders (text/highlights)
+  // create images subfolders (only highlights now)
   const imgs = path.join(base, 'images');
-  const imgSub = ['highlights', 'text'];
+  const imgSub = ['highlights'];
   for (const s of imgSub) {
     const p = path.join(imgs, s);
     if (!fs.existsSync(p)) {
@@ -120,12 +121,13 @@ app.get('/api/stories/:name', (req, res) => {
   const base = storyPath(name);
   if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
   try {
-    const text = fs.readFileSync(path.join(base, 'text.md'), 'utf8');
+    const textPath = path.join(base, 'text.md');
+    const text = fs.existsSync(textPath) ? fs.readFileSync(textPath, 'utf8') : '';
     const highlights = fs.readFileSync(path.join(base, 'highlights.md'), 'utf8');
     const imagesDir = path.join(base, 'images');
     const imageList = {};
     if (fs.existsSync(imagesDir)) {
-      for (const sub of ['highlights', 'text']) {
+      for (const sub of ['highlights']) {
         const p = path.join(imagesDir, sub);
         if (!fs.existsSync(p)) {
           imageList[sub] = [];
@@ -285,7 +287,8 @@ app.get('/api/stories/:name', (req, res) => {
    if (!file || !content) {
      return res.status(400).json({ ok: false, error: 'file and content required' });
    }
-   if (!['text.md', 'highlights.md'].includes(file)) {
+   // only highlights.md may be saved now; text.md is no longer generated/edited
+   if (!['highlights.md'].includes(file)) {
      return res.status(400).json({ ok: false, error: 'invalid file' });
    }
    const base = storyPath(name);
@@ -302,9 +305,9 @@ app.get('/api/stories/:name', (req, res) => {
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     const story = req.params.name;
-    const type = req.body.type; // expected: highlights|text
-    const allowed = ['highlights', 'text'];
-    const t = allowed.includes(type) ? type : 'text';
+    const type = req.body.type; // expected: highlights
+    const allowed = ['highlights'];
+    const t = allowed.includes(type) ? type : 'highlights';
     const dest = path.join(STORIES_ROOT, safeName(story), 'images', t);
     fs.mkdirSync(dest, { recursive: true });
     cb(null, dest);

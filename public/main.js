@@ -968,6 +968,8 @@ async function refreshTiles() {
         if (!got || !got.ok) return alert(got && got.error ? got.error : 'Failed to load tile');
         state.currentView = { type: 'tile', id: t.id };
         editor.value = got.content || '';
+        // update header to show "story - tile title"
+        try { currentStoryTitle.textContent = `${state.currentStory} - ${t.title || '(untitled)'}`; } catch (e) {}
         setEditorEnabled(true);
         renderPreview();
       });
@@ -1003,6 +1005,8 @@ async function refreshTiles() {
         if (state.currentView && state.currentView.type === 'tile' && state.currentView.id === t.id) {
           state.currentView = { type: 'text', name: null };
           editor.value = state.storyData && state.storyData.text ? state.storyData.text : '';
+          // restore header to just the story name
+          try { currentStoryTitle.textContent = state.currentStory || 'No story opened'; } catch (e) {}
           renderPreview();
         }
         await refreshTiles();
@@ -1135,6 +1139,7 @@ if (createTileBtn) {
     if (got && got.ok) {
       state.currentView = { type: 'tile', id: res.id };
       editor.value = got.content || '';
+      // update header to show "story - tile title      try { currentStoryTitle.textContent = `${state.currentStory} - ${res.tile && res.tile.title ? res.tile.title : '(untitled)'}`; } catch (e) {}
       setEditorEnabled(true);
       renderPreview();
     }

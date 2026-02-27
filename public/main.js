@@ -504,6 +504,8 @@ currentStoryTitle.addEventListener('click', async () => {
       ? (marked.parse(combined || ''))
       : simpleMarkdownToHtml(combined || '');
     preview.innerHTML = html || '<div class="empty-preview">[no tiles]</div>';
+    // ensure #tags are rendered as pill elements in the concatenated full view as well
+    try { renderTags(preview); } catch (e) { console.warn('renderTags failed on full view', e); }
   } catch (e) {
     console.error('show full tiles failed', e);
     // on error, fall back to editor text preview but keep full view state
@@ -1169,6 +1171,8 @@ async function refreshTiles() {
               // preserve read-only state
               setEditorEnabled(false);
               preview.innerHTML = html2 || '<div class="empty-preview">[no tiles]</div>';
+              // render tags (#tag) into pills for the refreshed full view
+              try { renderTags(preview); } catch (e) { console.warn('renderTags failed on full refresh', e); }
             }
           } catch (e) {
             console.warn('refresh full tiles view failed', e);

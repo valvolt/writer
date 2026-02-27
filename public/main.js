@@ -757,15 +757,35 @@ document.addEventListener('keydown', (e) => {
 /* Image upload via sidebar has been replaced by right-click upload (globalHiddenFileInput). */
 
  // --- Entities lists and counts ---
- function refreshEntityLists(mainTextOverride) {
+ async function refreshEntityLists(mainTextOverride) {
    // If someone accidentally passed a non-string (e.g. Event) as the handler arg, ignore it.
    if (mainTextOverride && typeof mainTextOverride !== 'string') mainTextOverride = undefined;
    // If no story is opened and no override provided, nothing to do.
    if (!state.storyData && typeof mainTextOverride === 'undefined') return;
    // Determine the main text to count occurrences in:
    // - If caller provided an override (e.g. while typing in main text), use it.
-   // - Otherwise use the stored story main text from state.storyData.
-   const mainText = (typeof mainTextOverride !== 'undefined') ? mainTextOverride : ((state.storyData && state.storyData.text) ? state.storyData.text : '');
+   // - Otherwise prefer concatenated tiles content (if any), falling back to stored story main text.
+   let mainText = (typeof mainTextOverride !== 'undefined') ? mainTextOverride : ((state.storyData && state.storyData.text) ? state.storyData.text : '');
+   // If no override provided, attempt to build mainText from tiles (preferred source)
+   if (typeof mainTextOverride === 'undefined' && state.currentStory) {
+     try {
+       const listRes = await api.listTiles(state.currentStory);
+       if (listRes && listRes.ok && Array.isArray(listRes.tiles) && listRes.tiles.length > 0) {
+         let combined = '';
+         for (const t of listRes.tiles) {
+           try {
+             const tileRes = await api.getTile(state.currentStory, t.id);
+             if (tileRes && tileRes.ok) combined += (tileRes.content || '') + '\n\n';
+           } catch (e) {
+             console.warn('refreshEntityLists: failed to load tile', t.id, e);
+           }
+         }
+         if (combined.trim()) mainText = combined;
+       }
+     } catch (e) {
+       console.warn('refreshEntityLists: failed to list tiles', e);
+     }
+   }
    const hls = parseEntitySections(state.storyData && state.storyData.highlights ? state.storyData.highlights : '');
    const text = mainText || '';
 
@@ -1624,9 +1644,45 @@ preview.addEventListener('contextmenu', (ev) => {
     renderPreview();
     // update entity occurrence counts in real-time:
     // - if user is editing the main story text, count occurrences in editor.value
-    // - otherwise (editing an entity) count occurrences only in the stored main story text
+    // - if user is editing a tile, compute concatenated tiles with the current in-editor tile content
+    //   so counts update immediately as you type in a tile
     if (state.currentView && state.currentView.type === 'text') {
       refreshEntityLists(editor.value);
+    } else if (state.currentView && state.currentView.type === 'tile') {
+      // build a combined text using the latest editor content for the active tile
+      (async () => {
+        try {
+          const curId = state.currentView && state.currentView.id;
+          if (!state.currentStory || !curId) {
+            // fallback to stored data
+            refreshEntityLists();
+            return;
+          }
+          const listRes = await api.listTiles(state.currentStory);
+          if (!listRes || !listRes.ok) {
+            refreshEntityLists();
+            return;
+          }
+          const tiles = listRes.tiles || [];
+          let combined = '';
+          for (const t of tiles) {
+            if (t.id === curId) {
+              combined += (editor.value || '') + '\n\n';
+            } else {
+              try {
+                const tileRes = await api.getTile(state.currentStory, t.id);
+                if (tileRes && tileRes.ok) combined += (tileRes.content || '') + '\n\n';
+              } catch (err) {
+                console.warn('input: failed to load tile for counts', t.id, err);
+              }
+            }
+          }
+          refreshEntityLists(combined);
+        } catch (err) {
+          console.warn('input->refreshEntityLists for tile failed', err);
+          refreshEntityLists();
+        }
+      })();
     } else {
       refreshEntityLists();
     }

@@ -89,6 +89,7 @@ const highlightList = $('#highlightList');
 const hlSort = $('#hlSort');
 const newHighlightInput = $('#newHighlightInput');
 const createHighlightBtn = $('#createHighlightBtn');
+const highlightSection = document.querySelector('.entities');
 // hide the save button — we autosave on input so the button is now optional
 if (saveBtn) saveBtn.style.display = 'none';
 
@@ -451,6 +452,8 @@ async function refreshStories() {
           editor.value = '';
           preview.innerHTML = '';
           if (highlightList) highlightList.innerHTML = '';
+          // hide highlights area when no story is open
+          if (highlightSection) highlightSection.style.display = 'none';
           setEditorEnabled(false);
         }
         await refreshStories();
@@ -556,6 +559,9 @@ closeStoryBtn.addEventListener('click', () => {
   currentStoryTitle.textContent = 'No story opened';
   editor.value = '';
   if (highlightList) highlightList.innerHTML = '';
+  // hide highlights area when no story is open
+  if (highlightSection) highlightSection.style.display = 'none';
+  if (newHighlightInput) newHighlightInput.value = '';
   // hide tiles area
   if (tilesSection) tilesSection.style.display = 'none';
   // disable editor area when no story is open
@@ -579,8 +585,9 @@ async function openStory(name) {
   // keep editor disabled by default when opening a story
   setEditorEnabled(false);
 
-  // ensure tiles area visible and load tiles; render concatenated tiles into preview
+  // ensure tiles and highlights areas visible and load tiles; render concatenated tiles into preview
   if (tilesSection) tilesSection.style.display = 'block';
+  if (highlightSection) highlightSection.style.display = 'block';
   try {
     await refreshTiles();
     // fetch tiles and render concatenated content in order
@@ -1722,6 +1729,8 @@ preview.addEventListener('contextmenu', (ev) => {
  refreshStories();
  // ensure editor is disabled until a story is opened
  setEditorEnabled(false);
+ // hide highlights until a story is opened
+ if (highlightSection) highlightSection.style.display = 'none';
 
 // expose for debugging
 window._storyWriter = { state, refreshStories, openStory, saveMainText };

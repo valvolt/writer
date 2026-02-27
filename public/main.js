@@ -177,6 +177,18 @@ function tagStyleFor(tag) {
   return { background: bg, color };
 }
 
+/* Extract tags from text (global utility) — returns unique tag strings without the leading '#' */
+function extractTagsFromText(t) {
+  if (!t || typeof t !== 'string') return [];
+  const re = /#([A-Za-z0-9_-]+)/g;
+  const set = new Set();
+  let m;
+  while ((m = re.exec(t)) !== null) {
+    set.add(m[1]);
+  }
+  return Array.from(set);
+}
+
 /* Render occurrences of #tag inside the given root element (preview).
    Uses walkTextNodes to avoid replacing inside code, links, headings, etc. */
 function renderTags(root) {
@@ -873,7 +885,8 @@ function renderPreview() {
     console.log('[debug] preview rendered, html length=', (html || '').length, 'childNodes=', preview.childNodes.length, 'data-render-debug=', preview.getAttribute('data-render-debug'));
 
     // derive entities from state if available, otherwise empty lists
-    const hls = Object.keys(parseEntitySections((state.storyData && state.storyData.highlights) || ''));
+    const entityMap = parseEntitySections((state.storyData && state.storyData.highlights) || '');
+    const hls = Object.keys(entityMap);
 
     // build combined list (highlights) and sort by length desc to prefer longest match
     const combined = hls.map(n => ({ name: n, cls: 'entity-hl' }))
@@ -914,13 +927,35 @@ function renderPreview() {
         if (mt.index > cursor) {
           frag.appendChild(document.createTextNode(txt.slice(cursor, mt.index)));
         }
-        const a = document.createElement('a');
-        a.className = mt.cls;
-        a.textContent = mt.text;
-        a.href = 'javascript:void(0)';
-        a.dataset.entityName = mt.name;
-        a.dataset.entityType = 'highlights';
-        frag.appendChild(a);
+      const a = document.createElement('a');
+      a.className = mt.cls;
+      a.textContent = mt.text;
+      a.href = 'javascript:void(0)';
+      a.dataset.entityName = mt.name;
+      a.dataset.entityType = 'highlights';
+      // color link by the first tag found in the entity description:
+      // display the word with the tag pill background and use the pill text color for the link text.
+      try {
+        const ent = entityMap && entityMap[mt.name] ? entityMap[mt.name] : null;
+        const entTags = ent ? extractTagsFromText(ent.desc) : [];
+        if (entTags && entTags.length > 0) {
+          const st = tagStyleFor(entTags[0]);
+          // apply pill background and text color; add subtle padding & radius to mimic the pill
+          if (st && st.background) a.style.background = st.background;
+          if (st && st.color) a.style.color = st.color;
+          a.style.padding = '0.08em 0.35em';
+          a.style.borderRadius = '6px';
+          a.style.textDecoration = 'underline';
+        } else {
+          // no tag -> plain black text, no background
+          a.style.background = 'transparent';
+          a.style.color = '#000';
+          a.style.textDecoration = 'underline';
+        }
+      } catch (e) {
+        // if anything goes wrong, fallback to default link color (do nothing)
+      }
+      frag.appendChild(a);
         cursor = mt.index + mt.length;
       }
       if (cursor < txt.length) frag.appendChild(document.createTextNode(txt.slice(cursor)));
@@ -930,16 +965,10 @@ function renderPreview() {
     // render tags (#tag) as pastel pills
     renderTags(preview);
 
-    // attach hover and click handlers
+    // attach hover handlers only — clicks are intentionally disabled for entity words
     preview.querySelectorAll('a.entity-hl').forEach(a => {
       a.addEventListener('mouseover', onEntityHover);
       a.addEventListener('mouseout', onEntityOut);
-      a.addEventListener('click', (ev) => {
-        const name = a.dataset.entityName;
-        const type = a.dataset.entityType;
-        // open entity inline in main editor
-        openEntityEditor(type, name);
-      });
     });
   } catch (err) {
     console.error('renderPreview error', err);
@@ -1197,48 +1226,26 @@ async function createEntityAndOpen(type, name) {
   openEntityInEditor('highlights', name);
 }
 
-// clicking highlighted entity opens editor (delegation)
+/* clicking highlighted entity no longer opens the editor.
+   Editing highlights is managed from the left sidebar only. This handler
+   prevents the previous behavior and ensures clicks on entity words do nothing. */
 preview.addEventListener('click', (ev) => {
   const a = ev.target.closest('a.entity-hl');
   if (!a) return;
-  const name = a.dataset.entityName;
-  const type = a.dataset.entityType;
-  openEntityEditor(type, name);
+  // swallow the event so nothing happens when clicking an entity word
+  ev.preventDefault();
+  ev.stopPropagation();
 });
 
-// right-click on highlighted entity: edit or upload image
+/* right-click on highlighted entity used to open a custom context menu.
+   Disabled by design: highlight editing should be managed from the left menu only.
+   This handler prevents the custom context menu from appearing for highlighted words. */
 preview.addEventListener('contextmenu', (ev) => {
-  ev.preventDefault();
-  if (!state.currentStory) return;
   const a = ev.target.closest('a.entity-hl');
   if (!a) return;
-  const ename = a.dataset.entityName;
-  const etype = a.dataset.entityType; // 'highlights'
-
-  if (customContextEl) customContextEl.remove();
-  customContextEl = document.createElement('div');
-  customContextEl.className = 'custom-context';
-  customContextEl.style.left = ev.pageX + 'px';
-  customContextEl.style.top = ev.pageY + 'px';
-
-  const btnEdit = document.createElement('button');
-  btnEdit.textContent = `Edit "${ename}"`;
-  btnEdit.addEventListener('click', () => {
-    openEntityEditor(etype, ename);
-    if (customContextEl) customContextEl.remove();
-  });
-
-  const btnUpload = document.createElement('button');
-  btnUpload.textContent = `Upload image for "${ename}"`;
-  btnUpload.addEventListener('click', () => {
-    uploadContext = { mode: 'entity', type: etype, name: ename };
-    document.getElementById('globalHiddenFileInput').click();
-    if (customContextEl) customContextEl.remove();
-  });
-
-  customContextEl.appendChild(btnEdit);
-  customContextEl.appendChild(btnUpload);
-  document.body.appendChild(customContextEl);
+  // when right-clicking an entity word, prevent the native/context menu and do nothing.
+  ev.preventDefault();
+  // intentionally no custom context menu — highlights are managed from the sidebar only.
 });
 
  // live preview on input + autosave (debounced)

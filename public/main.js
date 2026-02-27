@@ -444,17 +444,19 @@ async function refreshStories() {
       try {
         const rr = await api.deleteStory(s);
         if (!rr || !rr.ok) return alert(rr && rr.error ? rr.error : 'Delete failed');
-        // if the deleted story is currently open, close it
+        // if the deleted story is currently open, perform a full close action so UI matches user pressing Close
         if (state.currentStory === s) {
-          state.currentStory = null;
-          state.storyData = null;
-          currentStoryTitle.textContent = 'No story opened';
-          editor.value = '';
-          preview.innerHTML = '';
-          if (highlightList) highlightList.innerHTML = '';
-          // hide highlights area when no story is open
-          if (highlightSection) highlightSection.style.display = 'none';
-          setEditorEnabled(false);
+          try { closeCurrentStory(); } catch (e) {
+            // fallback: perform minimal cleanup if closeCurrentStory is unavailable
+            state.currentStory = null;
+            state.storyData = null;
+            currentStoryTitle.textContent = 'No story opened';
+            editor.value = '';
+            preview.innerHTML = '';
+            if (highlightList) highlightList.innerHTML = '';
+            if (highlightSection) highlightSection.style.display = 'none';
+            setEditorEnabled(false);
+          }
         }
         await refreshStories();
       } catch (err) {
@@ -553,10 +555,11 @@ currentStoryTitle.addEventListener('blur', async () => {
   openStory(res.name);
 });
 
-closeStoryBtn.addEventListener('click', () => {
+/* Close the currently-open story and clear UI state so the left menu collapses
+   and the editor/preview return to the initial state (same behavior as Close button). */
+function closeCurrentStory() {
   state.currentStory = null;
   state.storyData = null;
-  // ensure we are not in full view anymore so rendered tags won't be re-applied
   state.currentView = { type: 'text', name: null };
   currentStoryTitle.textContent = 'No story opened';
   editor.value = '';
@@ -575,6 +578,10 @@ closeStoryBtn.addEventListener('click', () => {
   setEditorEnabled(false);
   // refresh the stories list so the left menu updates (non-open stories appear grey)
   refreshStories();
+}
+
+closeStoryBtn.addEventListener('click', () => {
+  closeCurrentStory();
 });
 
 // --- Open / Save story ---

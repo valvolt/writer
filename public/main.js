@@ -1065,7 +1065,7 @@ async function refreshTiles() {
         const targetEl = e.currentTarget;
         if (!draggedEl || !targetEl || draggedEl === targetEl) {
           // cleanup and exit
-          Array.from(tileList.children).forEach(n => n.classList.remove('drop-before', 'drop-after'));
+ Array.from(tileList.children).forEach(n => n.classList.remove('drop-before', 'drop-after'));
           return;
         }
         // insert based on indicator
@@ -1086,6 +1086,32 @@ async function refreshTiles() {
         const rr = await api.reorderTiles(state.currentStory, newOrder);
         if (!rr || !rr.ok) return alert(rr && rr.error ? rr.error : 'Reorder failed');
         await refreshTiles();
+        // if the user is viewing the full concatenated tiles, refresh that rendered view now
+        if (state.currentView && state.currentView.type === 'full') {
+          try {
+            const listRes2 = await api.listTiles(state.currentStory);
+            if (listRes2 && listRes2.ok) {
+              const tiles2 = listRes2.tiles || [];
+              let combined2 = '';
+              for (const tt of tiles2) {
+                try {
+                  const tileRes2 = await api.getTile(state.currentStory, tt.id);
+                  if (tileRes2 && tileRes2.ok) combined2 += (tileRes2.content || '') + '\n\n';
+                } catch (err) {
+                  console.warn('failed to load tile during full refresh', tt.id, err);
+                }
+              }
+              const html2 = (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function')
+                ? marked.parse(combined2 || '')
+                : simpleMarkdownToHtml(combined2 || '');
+              // preserve read-only state
+              setEditorEnabled(false);
+              preview.innerHTML = html2 || '<div class="empty-preview">[no tiles]</div>';
+            }
+          } catch (e) {
+            console.warn('refresh full tiles view failed', e);
+          }
+        }
       });
 
       tileList.appendChild(li);

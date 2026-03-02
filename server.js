@@ -48,20 +48,23 @@ if (!fs.existsSync(STORIES_ROOT)) {
  }
  
  // public endpoint returning auth status for the current browser session
- app.get('/api/auth-status', (req, res) => {
-   const isAuth = !!(req && req.oidc && req.oidc.isAuthenticated && req.oidc.isAuthenticated());
-   const user = isAuth && req.oidc && req.oidc.user ? {
-     name: req.oidc.user.name || null,
-     email: req.oidc.user.email || null
-   } : null;
-   res.json({
-     ok: true,
-     authenticated: isAuth,
-     user,
-     loginUrl: '/login',
-     logoutUrl: '/logout'
-   });
- });
+app.get('/api/auth-status', (req, res) => {
+  const isAuth = !!(req && req.oidc && req.oidc.isAuthenticated && req.oidc.isAuthenticated());
+  const user = isAuth && req.oidc && req.oidc.user ? {
+    name: req.oidc.user.name || null,
+    nickname: req.oidc.user.nickname || null,
+    email: req.oidc.user.email || null,
+    // normalize to boolean (may be undefined)
+    email_verified: !!req.oidc.user.email_verified
+  } : null;
+  res.json({
+    ok: true,
+    authenticated: isAuth,
+    user,
+    loginUrl: '/login',
+    logoutUrl: '/logout'
+  });
+});
  
  // profile endpoint — requires authentication and returns the OIDC user profile
  app.get('/profile', requiresAuth(), (req, res) => {

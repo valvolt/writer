@@ -1870,8 +1870,20 @@ preview.addEventListener('contextmenu', (ev) => {
  const splashLoginBtn = document.getElementById('splashLoginBtn');
  const splashEl = document.getElementById('splash');
 
- function applyAuthStatus(status) {
-   const isAuth = status && status.authenticated;
+function applyAuthStatus(status) {
+  const isAuth = status && status.authenticated;
+  // If the user is authenticated but their email is not verified, inform them and log them out.
+  // This prevents unverified accounts from using editing features.
+  if (isAuth && status && status.user && status.user.email_verified === false) {
+    try {
+      // show a clear message and then redirect to /logout to end the session
+      alert('Please verify your email address before using this service. You will be logged out.');
+    } catch (e) {
+      /* ignore alert failures in non-browser environments */
+    }
+    try { window.location.href = '/logout'; } catch (e) { /* ignore */ }
+    return;
+  }
   // show/hide login/logout buttons
   // prefer showing the user's email next to the Logout control (fallback to nickname/name when email missing)
   const emailStr = (status && status.user && status.user.email) ? status.user.email : '';

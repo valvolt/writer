@@ -452,11 +452,14 @@ async function refreshStories() {
     const li = document.createElement('li');
     li.className = 'story-item';
     const nameSpan = document.createElement('span');
-    nameSpan.textContent = s;
-    nameSpan.dataset.name = s;
+    // support server returning either plain strings or objects { id, name }
+    const storyId = (typeof s === 'string') ? s : (s.id || s.name || '');
+    const displayName = (typeof s === 'string') ? s : (s.name || s.id || '');
+    nameSpan.textContent = displayName;
+    nameSpan.dataset.name = storyId;
     // apply explicit classes so styling is consistent and easy to override
     if (state.currentStory) {
-      if (state.currentStory !== s) {
+      if (state.currentStory !== storyId) {
         nameSpan.classList.add('story-item--muted');
         nameSpan.classList.remove('story-item--active');
       } else {
@@ -468,7 +471,7 @@ async function refreshStories() {
       nameSpan.classList.remove('story-item--muted');
       nameSpan.classList.remove('story-item--active');
     }
-    nameSpan.addEventListener('click', () => openStory(s));
+    nameSpan.addEventListener('click', () => openStory(storyId));
     li.appendChild(nameSpan);
 
     // delete button (asks for confirmation before deleting the story folder)
@@ -477,12 +480,12 @@ async function refreshStories() {
     del.textContent = 'Delete';
     del.addEventListener('click', async (ev) => {
       ev.stopPropagation();
-      if (!confirm(`Delete story "${s}" and all its files/images? This cannot be undone.`)) return;
+      if (!confirm(`Delete story "${displayName}" and all its files/images? This cannot be undone.`)) return;
       try {
-        const rr = await api.deleteStory(s);
+        const rr = await api.deleteStory(storyId);
         if (!rr || !rr.ok) return alert(rr && rr.error ? rr.error : 'Delete failed');
         // if the deleted story is currently open, perform a full close action so UI matches user pressing Close
-        if (state.currentStory === s) {
+        if (state.currentStory === storyId) {
           try { closeCurrentStory(); } catch (e) {
             // fallback: perform minimal cleanup if closeCurrentStory is unavailable
             state.currentStory = null;
@@ -1860,6 +1863,74 @@ preview.addEventListener('contextmenu', (ev) => {
  setEditorEnabled(false);
  // hide highlights until a story is opened
  if (highlightSection) highlightSection.style.display = 'none';
+
+ // --- Auth: check session and show splash / login / logout ---
+ const loginBtn = document.getElementById('loginBtn');
+ const logoutBtn = document.getElementById('logoutBtn');
+ const splashLoginBtn = document.getElementById('splashLoginBtn');
+ const splashEl = document.getElementById('splash');
+
+ function applyAuthStatus(status) {
+   const isAuth = status && status.authenticated;
+  // show/hide login/logout buttons
+  // prefer showing the user's email next to the Logout control (fallback to nickname/name when email missing)
+  const emailStr = (status && status.user && status.user.email) ? status.user.email : '';
+  const displayName = (status && status.user && (status.user.nickname || status.user.name))
+    ? (status.user.nickname || status.user.name)
+    : '';
+  if (loginBtn) loginBtn.style.display = isAuth ? 'none' : 'inline-block';
+  if (logoutBtn) {
+    logoutBtn.style.display = isAuth ? 'inline-block' : 'none';
+    // show the email (preferred) or displayName next to the logout action as a separate element
+    const existingUserEl = document.getElementById('currentUserEmail');
+    const labelText = emailStr || displayName || '';
+    if (isAuth && labelText) {
+      if (existingUserEl) {
+        existingUserEl.textContent = labelText;
+      } else {
+        const span = document.createElement('span');
+        span.id = 'currentUserEmail';
+        span.style.marginRight = '8px';
+        span.style.fontSize = '14px';
+        span.style.fontWeight = '500';
+        span.textContent = labelText;
+        // insert the span immediately before the logout button
+        if (logoutBtn && logoutBtn.parentNode) logoutBtn.parentNode.insertBefore(span, logoutBtn);
+      }
+      // keep the logout button text minimal — user sees email then [Log Out]
+      logoutBtn.textContent = 'Log Out';
+    } else {
+      if (existingUserEl && existingUserEl.parentNode) existingUserEl.parentNode.removeChild(existingUserEl);
+      logoutBtn.textContent = 'Log out';
+    }
+  }
+  // show or hide the full-screen splash overlay
+   if (splashEl) {
+     splashEl.style.display = isAuth ? 'none' : 'flex';
+     splashEl.setAttribute('aria-hidden', isAuth ? 'true' : 'false');
+   }
+   // enable/disable editing controls based on auth state
+   const editable = !!isAuth;
+   try { setEditorEnabled(editable && !!state.currentStory); } catch (e) {}
+   if (createStoryBtn) createStoryBtn.disabled = !editable;
+   if (createTileBtn) createTileBtn.disabled = !editable;
+   if (createHighlightBtn) createHighlightBtn.disabled = !editable;
+   if (saveBtn) saveBtn.disabled = !editable;
+ }
+
+ // wire buttons to server-side /login and /logout
+ if (loginBtn) loginBtn.addEventListener('click', () => { window.location.href = '/login'; });
+ if (logoutBtn) logoutBtn.addEventListener('click', () => { window.location.href = '/logout'; });
+ if (splashLoginBtn) splashLoginBtn.addEventListener('click', () => { window.location.href = '/login'; });
+
+ // fetch auth status on load and apply UI state
+ fetch('/api/auth-status').then(r => r.json()).then(s => {
+   if (s && s.ok) applyAuthStatus(s);
+   else applyAuthStatus({ authenticated: false });
+ }).catch(e => {
+   console.warn('auth-status fetch failed', e);
+   applyAuthStatus({ authenticated: false });
+ });
 
 (function() {
   // ensure #tag pills are rendered any time the preview DOM is updated while viewing the full concatenated tiles.

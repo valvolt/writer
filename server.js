@@ -41,8 +41,8 @@ if (!fs.existsSync(STORIES_ROOT)) {
          // ignore user folder read errors and continue with others
        }
      }
-     let html = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Published stories</title><style>body{font-family:Arial,Helvetica,sans-serif;max-width:900px;margin:32px auto;padding:0 16px}h1{margin-top:0}ul{line-height:1.6}</style></head><body>';
-     html += '<h1>Published stories</h1>';
+     let html = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Published stories</title><style>body{font-family:Arial,Helvetica,sans-serif;max-width:900px;margin:32px auto;padding:0 16px}h1{margin-top:0}ul{line-height:1.6}.write-btn{display:inline-block;margin:8px 0;padding:8px 12px;background:#2b7cff;color:#fff;border-radius:6px;text-decoration:none}</style></head><body>';
+     html += '<h1>Published stories</h1><p><a href="/write" class="write-btn">Write</a></p>';
      if (published.length === 0) {
        html += '<p>No published stories yet.</p>';
      } else {
@@ -655,12 +655,14 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
        }
      }
      // write aggregated markdown (overwrite)
-     const outPath = path.join(publishedDir, `${safeName(name)}.md`);
-     try { fs.writeFileSync(outPath, agg, 'utf8'); } catch (e) { return res.status(500).json({ ok: false, error: 'failed to write published file' }); }
-     // return public URL relative to /stories
-     const rel = path.relative(STORIES_ROOT, outPath);
-     const url = '/' + path.join('stories', rel).split(path.sep).map(encodeURIComponent).join('/');
-     return res.json({ ok: true, url });
+    const outPath = path.join(publishedDir, `${safeName(name)}.md`);
+    // prepend story title as a markdown heading before aggregated content
+    const outContent = `# ${name}\n\n${agg}`;
+    try { fs.writeFileSync(outPath, outContent, 'utf8'); } catch (e) { return res.status(500).json({ ok: false, error: 'failed to write published file' }); }
+    // Return a friendly public route under /published/:userId/:storyId instead of exposing the raw file path.
+    // Use the resolved userId (from resolveUserAndBase above) and the story name.
+    const pubRoute = `/published/${encodeURIComponent(userId)}/${encodeURIComponent(name)}`;
+    return res.json({ ok: true, url: pubRoute });
    } catch (err) {
      return res.status(500).json({ ok: false, error: err.message });
    }

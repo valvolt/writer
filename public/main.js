@@ -2092,7 +2092,8 @@ function applyAuthStatus(status) {
  if (logoutBtn) logoutBtn.addEventListener('click', () => { window.location.href = '/logout'; });
  if (splashLoginBtn) splashLoginBtn.addEventListener('click', () => { window.location.href = '/login'; });
 
- // Publish button handler: triggers server-side publish and opens public view in a new tab
+ // Publish button handler: triggers server-side publish but keeps the user in the editor.
+ // The server returns the public URL; we show a non-intrusive notice and do NOT navigate.
  const publishBtnEl = document.getElementById('publishBtn');
  if (publishBtnEl) {
    publishBtnEl.addEventListener('click', async () => {
@@ -2109,9 +2110,51 @@ function applyAuthStatus(status) {
          alert(err);
          return;
        }
-       // open published URL in a new tab (public)
+       // Keep user in the editor: show a confirmation with a clickable link they can open manually.
        if (body.url) {
-         try { window.open(body.url, '_blank'); } catch (e) { window.location.href = body.url; }
+         try {
+           // convert the returned storage URL (/stories/.../published/name.md) into the friendly route /published/:user/:story
+           let pubRoute = body.url;
+           try {
+             const u = body.url;
+             // Expecting something like: /stories/<userId>/<storyId>/published/<name>.md
+             const m = u.match(/^\/stories\/([^\/]+)\/([^\/]+)\/published\/([^\/]+)\.md$/);
+             if (m) {
+               const user = decodeURIComponent(m[1]);
+               const story = decodeURIComponent(m[2]);
+               pubRoute = `/published/${encodeURIComponent(user)}/${encodeURIComponent(story)}`;
+             }
+           } catch (e) {
+             // fallback to body.url if parsing fails
+             pubRoute = body.url;
+           }
+
+           // create a temporary dialog element to show the published link
+           const infoId = 'publishInfo';
+           let infoEl = document.getElementById(infoId);
+           if (!infoEl) {
+             infoEl = document.createElement('div');
+             infoEl.id = infoId;
+             infoEl.style.position = 'fixed';
+             infoEl.style.right = '16px';
+             infoEl.style.bottom = '16px';
+             infoEl.style.background = '#0b6cff';
+             infoEl.style.color = '#fff';
+             infoEl.style.padding = '10px 12px';
+             infoEl.style.borderRadius = '8px';
+             infoEl.style.boxShadow = '0 4px 12px rgba(0,0,0,0.2)';
+             infoEl.style.zIndex = 9999;
+             document.body.appendChild(infoEl);
+           }
+           infoEl.innerHTML = `Published ✓ — <a href="${pubRoute}" target="_blank" style="color:#fff;text-decoration:underline">View story</a>`;
+           // auto-dismiss after 10s
+           setTimeout(() => {
+             try { const el = document.getElementById(infoId); if (el) el.remove(); } catch (e) {}
+           }, 10000);
+         } catch (e) {
+           // fallback: simple alert but still keep user in editor
+           alert('Published. View at: ' + body.url);
+         }
        } else {
          alert('Published, but no public URL returned');
        }

@@ -18,8 +18,12 @@ if (!fs.existsSync(STORIES_ROOT)) {
   fs.mkdirSync(STORIES_ROOT, { recursive: true });
 }
 
- // serve frontend
- app.use(express.static(path.join(__dirname, 'public')));
+ // serve frontend under /write (move the root UI to /write)
+ app.use('/write', express.static(path.join(__dirname, 'public')));
+ // redirect root to /write so existing links continue to work
+ app.get('/', (req, res) => {
+   res.redirect(302, '/write');
+ });
 
  // configure express-openid-connect using values from .env (if present)
  // see .env for AUTH0_AUTH_REQUIRED, AUTH0_AUTH0LOGOUT, SECRET, AUTH0_BASEURL, AUTH0_CLIENT_ID, AUTH0_ISSUER_BASE_URL

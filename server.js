@@ -18,11 +18,45 @@ if (!fs.existsSync(STORIES_ROOT)) {
   fs.mkdirSync(STORIES_ROOT, { recursive: true });
 }
 
- // serve frontend under /write (move the root UI to /write)
+ // serve frontend under /write
  app.use('/write', express.static(path.join(__dirname, 'public')));
- // redirect root to /write so existing links continue to work
+ // Public listing at / showing published stories (no authentication required).
+ // This scans each user's folder for a published/<story>.md file and lists available published stories.
  app.get('/', (req, res) => {
-   res.redirect(302, '/write');
+   try {
+     const published = [];
+     const users = fs.readdirSync(STORIES_ROOT, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name);
+     for (const u of users) {
+       const userPath = path.join(STORIES_ROOT, u);
+       // skip non-directories or special files
+       try {
+         const stories = fs.readdirSync(userPath, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name);
+         for (const s of stories) {
+           const pubPath = path.join(userPath, s, 'published', `${safeName(s)}.md`);
+           if (fs.existsSync(pubPath)) {
+             published.push({ user: u, story: s, url: `/published/${encodeURIComponent(u)}/${encodeURIComponent(s)}` });
+           }
+         }
+       } catch (e) {
+         // ignore user folder read errors and continue with others
+       }
+     }
+     let html = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Published stories</title><style>body{font-family:Arial,Helvetica,sans-serif;max-width:900px;margin:32px auto;padding:0 16px}h1{margin-top:0}ul{line-height:1.6}</style></head><body>';
+     html += '<h1>Published stories</h1>';
+     if (published.length === 0) {
+       html += '<p>No published stories yet.</p>';
+     } else {
+       html += '<ul>';
+       for (const p of published) {
+         html += `<li><strong>${p.user}</strong> — <a href="${p.url}">${p.story}</a></li>`;
+       }
+       html += '</ul>';
+     }
+     html += '</body></html>';
+     res.send(html);
+   } catch (err) {
+     res.status(500).send('failed to generate published list');
+   }
  });
 
  // configure express-openid-connect using values from .env (if present)
@@ -89,6 +123,14 @@ function safeName(name) {
 
 function storyPath(name) {
   return path.join(STORIES_ROOT, safeName(name));
+}
+
+// Helper to escape HTML for safe embedding in server-rendered pages
+function escapeHtml(s) {
+  return String(s || '')
+    .replace(/&/g, '&')
+    .replace(/</g, '<')
+    .replace(/>/g, '>');
 }
 
 function ensureStoryStructure(name) {
@@ -195,6 +237,27 @@ function resolveUserAndBase(req, storyName) {
   return { userId, base, userPath };
 }
 
+// Flexible resolver: supports either the current authenticated user's stories
+// (default behavior) or an explicit user-prefixed name like "userId/storyName".
+// This helps when the frontend or direct requests sometimes pass "user/story".
+function resolveBaseFlexible(req, storyName) {
+  if (!storyName || typeof storyName !== 'string') {
+    return resolveUserAndBase(req, storyName);
+  }
+  // If the caller provided an explicit user prefix (userId/story), honor it.
+  // Use the first path segment as userId and the rest as the story name.
+  if (storyName.indexOf('/') !== -1) {
+    const parts = storyName.split('/');
+    const userId = parts.shift();
+    const name = parts.join('/');
+    const base = path.join(STORIES_ROOT, userId, safeName(name));
+    const userPath = path.join(STORIES_ROOT, userId);
+    return { userId, base, userPath };
+  }
+  // Fallback to resolving from the authenticated user
+  return resolveUserAndBase(req, storyName);
+}
+
 function ensureUserStoryStructure(userPath, storyName) {
   const base = path.join(userPath, safeName(storyName));
   if (!fs.existsSync(base)) {
@@ -297,7 +360,7 @@ app.post('/api/stories/:name/rename', requireAuth, (req, res) => {
 // Get story content (text, characters, locations) and image lists
 app.get('/api/stories/:name', requireAuth, (req, res) => {
   const name = req.params.name;
-  const { userId, base } = resolveUserAndBase(req, name);
+  const { userId, base } = resolveBaseFlexible(req, name);
   if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
   try {
     const textPath = path.join(base, 'text.md');
@@ -343,7 +406,7 @@ app.get('/api/stories/:name/tiles', requireAuth, (req, res) => {
 app.post('/api/stories/:name/tiles', requireAuth, (req, res) => {
   const name = req.params.name;
   const { title, content } = req.body || {};
-  const { userId, base, userPath } = resolveUserAndBase(req, name);
+  const { userId, base, userPath } = resolveBaseFlexible(req, name);
   // ensure story exists (create structure if missing) so tile creation works reliably
   if (!fs.existsSync(base)) {
     try {
@@ -488,7 +551,7 @@ const storage = multer.diskStorage({
     const allowed = ['highlights'];
     const t = allowed.includes(type) ? type : 'highlights';
     try {
-      const { userId, base } = resolveUserAndBase(req, story);
+      const { userId, base } = resolveBaseFlexible(req, story);
       const dest = path.join(base, 'images', t);
       fs.mkdirSync(dest, { recursive: true });
       cb(null, dest);
@@ -508,7 +571,7 @@ const upload = multer({ storage });
 app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ ok: false, error: 'no file uploaded' });
   try {
-    const { userId, base } = resolveUserAndBase(req, req.params.name);
+    const { userId, base } = resolveBaseFlexible(req, req.params.name);
     const used = getUserUsageBytes(userId);
     const quota = (parseInt(process.env.USER_QUOTA_MB || '10', 10) * 1024 * 1024);
     const newSize = used + (req.file.size || 0);
@@ -615,6 +678,112 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
    }
  });
  
+ // Minimal markdown -> HTML renderer used for published stories to match the editor preview
+ function simpleMarkdownToHtml(md) {
+   if (!md) return '';
+   const lines = String(md).split(/\r?\n/);
+   let html = '';
+   let inList = false;
+
+   function escapeHtml(s) {
+     return String(s)
+       .replace(/&/g, '&')
+       .replace(/</g, '<')
+       .replace(/>/g, '>');
+   }
+
+   for (let raw of lines) {
+     // preserve original raw line for heading detection and some heuristics
+     const cleaned = raw.replace(/^[\uFEFF\u200B]+/, '');
+     // headings: 1-6 hashes followed by a space
+     const h = cleaned.match(/^(#{1,6})\s+(.*)$/);
+     if (h) {
+       if (inList) { html += '</ul>'; inList = false; }
+       const level = h[1].length;
+       const headingText = escapeHtml(h[2].replace(/^[#\s]+/, ''));
+       html += `<h${level}>${headingText}</h${level}>`;
+       continue;
+     }
+
+     // unordered lists (- or *) 
+     const li = cleaned.match(/^\s*[-*]\s+(.*)$/);
+     if (li) {
+       if (!inList) { html += '<ul>'; inList = true; }
+       let content = li[1];
+
+       // images: ![alt](url)
+       content = content.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
+         return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
+       });
+       // inline code, bold, italic
+       content = escapeHtml(content)
+         .replace(/`([^`]+)`/g, '<code>$1</code>')
+         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+         .replace(/\*(.+?)\*/g, '<em>$1</em>');
+       html += `<li>${content}</li>`;
+       continue;
+     } else {
+       if (inList) { html += '</ul>'; inList = false; }
+     }
+
+     // process inline elements for paragraphs
+     let paragraph = escapeHtml(raw)
+       .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
+         return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
+       })
+       .replace(/`([^`]+)`/g, '<code>$1</code>')
+       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+       .replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+     if (paragraph.trim() === '') {
+       // blank line -> paragraph separator (emit nothing)
+       html += '';
+     } else {
+       html += `<p>${paragraph}</p>`;
+     }
+   }
+
+   if (inList) html += '</ul>';
+   return html;
+ }
+
+ // Public view for a published story: renders the aggregated markdown in a minimal page (no editor/menu).
+ app.get('/published/:userId/:storyId', (req, res) => {
+   try {
+     const userId = req.params.userId;
+     const storyId = req.params.storyId;
+     if (!userId || !storyId) return res.status(400).send('invalid request');
+     const pubPath = path.join(STORIES_ROOT, userId, safeName(storyId), 'published', `${safeName(storyId)}.md`);
+     if (!fs.existsSync(pubPath)) return res.status(404).send('published story not found');
+     let md = '';
+     try { md = fs.readFileSync(pubPath, 'utf8'); } catch (e) { return res.status(500).send('failed to read published story'); }
+
+     // Render markdown to HTML on the server using the same simple renderer as the editor fallback.
+     const rendered = simpleMarkdownToHtml(md);
+     const html = `<!doctype html>
+ <html>
+ <head>
+ <meta charset="utf-8"/>
+ <meta name="viewport" content="width=device-width,initial-scale=1"/>
+ <title>${escapeHtml(userId)} / ${escapeHtml(storyId)}</title>
+ <link rel="stylesheet" href="/write/style.css">
+ <style>
+   body{font-family:Arial,Helvetica,sans-serif;max-width:900px;margin:24px auto;padding:16px}
+   .story-content img{max-width:100%;height:auto}
+ </style>
+ </head>
+ <body>
+ <main class="story-content">
+ ${rendered}
+ </main>
+ </body>
+ </html>`;
+     res.send(html);
+   } catch (err) {
+     res.status(500).send('failed to render published story');
+   }
+ });
+
  // Start server
  const PORT = process.env.PORT || 3000;
  app.listen(PORT, () => {

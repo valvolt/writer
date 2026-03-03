@@ -51,6 +51,74 @@ const api = {
   }).then(r => r.json())
 };
 
+// Publish button state checker (global)
+// Enables the Publish button only when:
+//  - the user is authenticated (heuristic: logout button visible)
+//  - a story is open
+//  - there is at least one tile with non-empty content
+async function updatePublishButtonState() {
+  const publishBtn = document.getElementById('publishBtn');
+  if (!publishBtn) return;
+
+  // Determine authentication status from the server to avoid races with UI updates.
+  let isAuth = false;
+  try {
+    const st = await fetch('/api/auth-status').then(r => r.json()).catch(() => null);
+    isAuth = !!(st && st.ok && st.authenticated);
+  } catch (e) {
+    isAuth = false;
+  }
+
+  // If not authenticated or no story open, hide/disable publish
+  if (!isAuth || !state.currentStory) {
+    publishBtn.style.display = isAuth ? 'inline-block' : 'none';
+    publishBtn.disabled = true;
+    return;
+  }
+
+  publishBtn.style.display = 'inline-block';
+  publishBtn.disabled = true;
+
+  try {
+    // Try to get tiles list
+    const listRes = await api.listTiles(state.currentStory).catch(() => null);
+
+    // If tiles call failed or returned empty, fall back to checking story text (state.storyData.text)
+    const tiles = (listRes && listRes.ok && Array.isArray(listRes.tiles)) ? listRes.tiles : [];
+
+    // If there are no tiles, consider storyData.text as a potential publishable source
+    if (tiles.length === 0) {
+      const textContent = (state.storyData && state.storyData.text) ? String(state.storyData.text).trim() : '';
+      // if main text is non-empty, allow publish
+      if (textContent.length > 0) {
+        publishBtn.disabled = false;
+        return;
+      }
+      publishBtn.disabled = true;
+      return;
+    }
+
+    // Check tiles in parallel for non-empty content
+    const checks = await Promise.all(tiles.map(async (t) => {
+      try {
+        const tileRes = await api.getTile(state.currentStory, t.id).catch(() => null);
+        return !!(tileRes && tileRes.ok && (tileRes.content || '').trim().length > 0);
+      } catch (e) {
+        return false;
+      }
+    }));
+
+    // Also consider main story text as a fallback source
+    const mainTextNonEmpty = !!(state.storyData && state.storyData.text && String(state.storyData.text).trim().length > 0);
+
+    const hasNonEmpty = checks.some(Boolean) || mainTextNonEmpty;
+    publishBtn.disabled = !hasNonEmpty;
+  } catch (e) {
+    // On unexpected errors, be permissive so users can still attempt to publish
+    publishBtn.disabled = false;
+  }
+}
+
 // --- state ---
 const state = {
   currentStory: null,
@@ -1325,6 +1393,45 @@ async function refreshTiles() {
     }
   } catch (e) {
     console.error('refreshTiles error', e);
+  } finally {
+    // After tiles are refreshed (or an error occurred), update the Publish button state.
+    // Prefer a direct, robust check here: query each tile's content (in parallel) and enable Publish
+    // if at least one tile contains non-empty content. This avoids races with separate async checks.
+    try {
+      const publishBtn = document.getElementById('publishBtn');
+      const logoutBtn = document.getElementById('logoutBtn');
+      const isAuthNow = !!(logoutBtn && logoutBtn.style.display !== 'none');
+      if (!publishBtn) return;
+      if (!isAuthNow || !state.currentStory) {
+        publishBtn.style.display = isAuthNow ? 'inline-block' : 'none';
+        publishBtn.disabled = true;
+      } else {
+        publishBtn.style.display = 'inline-block';
+        // if there are no tiles, keep disabled
+        const tilesEls = Array.from(tileList ? tileList.children : []);
+        if (tilesEls.length === 0) {
+          publishBtn.disabled = true;
+        } else {
+          // fetch tile contents in parallel with a conservative timeout via Promise.race if necessary
+          try {
+            const checks = await Promise.all(tilesEls.map(async (node) => {
+              const id = node && node.dataset && node.dataset.id ? node.dataset.id : null;
+              if (!id) return false;
+              const r = await api.getTile(state.currentStory, id).catch(() => null);
+              return !!(r && r.ok && (r.content || '').trim().length > 0);
+            }));
+            const hasNonEmpty = checks.some(Boolean);
+            publishBtn.disabled = !hasNonEmpty;
+          } catch (e) {
+            // On error be permissive so users can still attempt to publish
+            publishBtn.disabled = false;
+          }
+        }
+      }
+    } catch (err) {
+      // ignore publish state failures
+      console.warn('publish state update failed', err);
+    }
   }
 }
 
@@ -1890,50 +1997,133 @@ function applyAuthStatus(status) {
   const displayName = (status && status.user && (status.user.nickname || status.user.name))
     ? (status.user.nickname || status.user.name)
     : '';
-  if (loginBtn) loginBtn.style.display = isAuth ? 'none' : 'inline-block';
-  if (logoutBtn) {
-    logoutBtn.style.display = isAuth ? 'inline-block' : 'none';
-    // show the email (preferred) or displayName next to the logout action as a separate element
-    const existingUserEl = document.getElementById('currentUserEmail');
-    const labelText = emailStr || displayName || '';
-    if (isAuth && labelText) {
-      if (existingUserEl) {
-        existingUserEl.textContent = labelText;
-      } else {
-        const span = document.createElement('span');
-        span.id = 'currentUserEmail';
-        span.style.marginRight = '8px';
-        span.style.fontSize = '14px';
-        span.style.fontWeight = '500';
-        span.textContent = labelText;
-        // insert the span immediately before the logout button
-        if (logoutBtn && logoutBtn.parentNode) logoutBtn.parentNode.insertBefore(span, logoutBtn);
-      }
-      // keep the logout button text minimal — user sees email then [Log Out]
-      logoutBtn.textContent = 'Log Out';
-    } else {
-      if (existingUserEl && existingUserEl.parentNode) existingUserEl.parentNode.removeChild(existingUserEl);
-      logoutBtn.textContent = 'Log out';
-    }
-  }
-  // show or hide the full-screen splash overlay
-   if (splashEl) {
-     splashEl.style.display = isAuth ? 'none' : 'flex';
-     splashEl.setAttribute('aria-hidden', isAuth ? 'true' : 'false');
+   if (loginBtn) loginBtn.style.display = isAuth ? 'none' : 'inline-block';
+   if (logoutBtn) {
+     logoutBtn.style.display = isAuth ? 'inline-block' : 'none';
+     // show the email (preferred) or displayName next to the logout action as a separate element
+     const existingUserEl = document.getElementById('currentUserEmail');
+     const labelText = emailStr || displayName || '';
+     if (isAuth && labelText) {
+       if (existingUserEl) {
+         existingUserEl.textContent = labelText;
+       } else {
+         const span = document.createElement('span');
+         span.id = 'currentUserEmail';
+         span.style.marginRight = '8px';
+         span.style.fontSize = '14px';
+         span.style.fontWeight = '500';
+         span.textContent = labelText;
+         // insert the span immediately before the logout button
+         if (logoutBtn && logoutBtn.parentNode) logoutBtn.parentNode.insertBefore(span, logoutBtn);
+       }
+       // keep the logout button text minimal — user sees email then [Log Out]
+       logoutBtn.textContent = 'Log Out';
+     } else {
+       if (existingUserEl && existingUserEl.parentNode) existingUserEl.parentNode.removeChild(existingUserEl);
+       logoutBtn.textContent = 'Log out';
+     }
    }
-   // enable/disable editing controls based on auth state
-   const editable = !!isAuth;
-   try { setEditorEnabled(editable && !!state.currentStory); } catch (e) {}
-   if (createStoryBtn) createStoryBtn.disabled = !editable;
-   if (createTileBtn) createTileBtn.disabled = !editable;
-   if (createHighlightBtn) createHighlightBtn.disabled = !editable;
-   if (saveBtn) saveBtn.disabled = !editable;
- }
+   // show or hide the full-screen splash overlay
+    if (splashEl) {
+      splashEl.style.display = isAuth ? 'none' : 'flex';
+      splashEl.setAttribute('aria-hidden', isAuth ? 'true' : 'false');
+    }
+    // enable/disable editing controls based on auth state
+    const editable = !!isAuth;
+    try { setEditorEnabled(editable && !!state.currentStory); } catch (e) {}
+    if (createStoryBtn) createStoryBtn.disabled = !editable;
+    if (createTileBtn) createTileBtn.disabled = !editable;
+    if (createHighlightBtn) createHighlightBtn.disabled = !editable;
+    if (saveBtn) saveBtn.disabled = !editable;
+    // Publish button enabled only when authenticated and a story is open
+    const publishBtn = document.getElementById('publishBtn');
+
+    // updatePublishButtonState checks whether the Publish button should be enabled.
+    // It enables the button only when:
+    //  - the user is authenticated
+    //  - a story is open
+    //  - there is at least one tile whose content is non-empty
+    async function updatePublishButtonState() {
+      if (!publishBtn) return;
+      if (!isAuth || !state.currentStory) {
+        publishBtn.style.display = isAuth ? 'inline-block' : 'none';
+        publishBtn.disabled = true;
+        return;
+      }
+      publishBtn.style.display = 'inline-block';
+      publishBtn.disabled = true; // assume disabled until we find a non-empty tile
+
+      try {
+        const listRes = await api.listTiles(state.currentStory);
+        if (!listRes || !listRes.ok || !Array.isArray(listRes.tiles) || listRes.tiles.length === 0) {
+          // no tiles -> keep disabled
+          publishBtn.disabled = true;
+          return;
+        }
+        for (const t of listRes.tiles) {
+          try {
+            const tileRes = await api.getTile(state.currentStory, t.id);
+            if (tileRes && tileRes.ok) {
+              const content = (tileRes.content || '').trim();
+              if (content.length > 0) {
+                publishBtn.disabled = false;
+                return;
+              }
+            }
+          } catch (e) {
+            // ignore individual tile errors and continue checking others
+          }
+        }
+        // no non-empty tiles found
+        publishBtn.disabled = true;
+      } catch (e) {
+        // on error be permissive (enable) so users can still try to publish
+        publishBtn.disabled = false;
+      }
+    }
+
+    // Run an initial async check for publishability (do not block applyAuthStatus)
+    try { updatePublishButtonState(); } catch (e) {}
+
+  }
 
  // wire buttons to server-side /login and /logout
  if (loginBtn) loginBtn.addEventListener('click', () => { window.location.href = '/login'; });
  if (logoutBtn) logoutBtn.addEventListener('click', () => { window.location.href = '/logout'; });
  if (splashLoginBtn) splashLoginBtn.addEventListener('click', () => { window.location.href = '/login'; });
+
+ // Publish button handler: triggers server-side publish and opens public view in a new tab
+ const publishBtnEl = document.getElementById('publishBtn');
+ if (publishBtnEl) {
+   publishBtnEl.addEventListener('click', async () => {
+     if (!state.currentStory) return alert('Open a story first');
+     const confirmPublish = confirm('Publish the current story? This will overwrite any previously published version.');
+     if (!confirmPublish) return;
+     try {
+       publishBtnEl.disabled = true;
+       publishBtnEl.textContent = 'Publishing...';
+       const resp = await fetch(`/api/stories/${encodeURIComponent(state.currentStory)}/publish`, { method: 'POST' });
+       const body = await resp.json().catch(() => null);
+       if (!body || !body.ok) {
+         const err = body && body.error ? body.error : 'Publish failed';
+         alert(err);
+         return;
+       }
+       // open published URL in a new tab (public)
+       if (body.url) {
+         try { window.open(body.url, '_blank'); } catch (e) { window.location.href = body.url; }
+       } else {
+         alert('Published, but no public URL returned');
+       }
+     } catch (e) {
+       console.error('publish failed', e);
+       alert('Publish failed');
+     } finally {
+       publishBtnEl.disabled = false;
+       publishBtnEl.textContent = 'Publish';
+     }
+   });
+ }
 
  // fetch auth status on load and apply UI state
  fetch('/api/auth-status').then(r => r.json()).then(s => {

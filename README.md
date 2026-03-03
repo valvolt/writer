@@ -6,6 +6,12 @@ A small editor for story writers. Because I felt **Scrivener** and **Manuskript*
 
 Primarily made to be used offline on your local machine.
 
+## Test it online
+- you will need to register a user
+- you have a small quota
+- the server runs on http. It's not super secure, remember it's just for testing
+- try it here: http://46.225.219.90:3000/
+
 ## Run it
 ```
 git clone https://github.com/valvolt/writer.git

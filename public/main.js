@@ -494,6 +494,64 @@ function simpleMarkdownToHtml(md) {
   return html;
 }
 
+/* --------------------
+   Counting helpers
+   --------------------
+   sanitizeForCounting(text): removes image markdown (![alt](url)) and tags (#tag)
+   countWords(text): returns number of word tokens (Unicode-aware)
+   countChars(text): returns character count including spaces (per spec)
+   updateCounters(totalText, currentText): updates DOM nodes under #editorCounters
+*/
+function sanitizeForCounting(text) {
+  if (!text || typeof text !== 'string') return '';
+  // remove markdown images: ![alt](url)
+  let s = text.replace(/!\[[^\]]*]\)]*\)/g, ' ');
+  // remove tags like #keyword
+  s = s.replace(/#[A-Za-z0-9_-]+/g, ' ');
+  // normalize whitespace
+  s = s.replace(/\s+/g, ' ').trim();
+  return s;
+}
+
+function countWords(text) {
+  const s = sanitizeForCounting(text);
+  if (!s) return 0;
+  // Unicode-aware word matcher: letters, numbers, underscores and apostrophes are allowed inside words
+  try {
+    const matches = s.match(/\b[\p{L}\p{N}_']+\b/gu);
+    return matches ? matches.length : 0;
+  } catch (e) {
+    // Fallback for environments without Unicode property escapes
+    const matches = s.match(/\b[\w']+\b/g);
+    return matches ? matches.length : 0;
+  }
+}
+
+function countChars(text) {
+  const s = sanitizeForCounting(text);
+  return s.length;
+}
+
+function updateCounters(totalText, currentText) {
+  try {
+    const wcTotalEl = document.getElementById('wc-total');
+    const wcCurrentEl = document.getElementById('wc-current');
+    const ccTotalEl = document.getElementById('cc-total');
+    const ccCurrentEl = document.getElementById('cc-current');
+    const totalWords = countWords(totalText || '');
+    const currentWords = countWords(currentText || '');
+    const totalChars = countChars(totalText || '');
+    const currentChars = countChars(currentText || '');
+    if (wcTotalEl) wcTotalEl.textContent = totalWords.toLocaleString();
+    if (wcCurrentEl) wcCurrentEl.textContent = currentWords.toLocaleString();
+    if (ccTotalEl) ccTotalEl.textContent = totalChars.toLocaleString();
+    if (ccCurrentEl) ccCurrentEl.textContent = currentChars.toLocaleString();
+  } catch (e) {
+    // don't let counters break the app
+    console.warn('updateCounters failed', e);
+  }
+}
+
 function countOccurrences(text, name) {
   // guard: name required
   if (!name) return 0;
@@ -615,6 +673,12 @@ currentStoryTitle.addEventListener('click', async () => {
     preview.innerHTML = html || '<div class="empty-preview">[no tiles]</div>';
     // ensure #tags are rendered as pill elements in the concatenated full view as well
     try { renderTags(preview); } catch (e) { console.warn('renderTags failed on full view', e); }
+
+    // update counters: total is concatenated tiles, current is editor value if editing a tile
+    try {
+      const currentText = (state.currentView && state.currentView.type === 'tile') ? (editor.value || '') : '';
+      updateCounters(combined, currentText);
+    } catch (e) { /* ignore */ }
   } catch (e) {
     console.error('show full tiles failed', e);
     // on error, fall back to editor text preview but keep full view state
@@ -1181,6 +1245,12 @@ document.addEventListener('keydown', (e) => {
     if (!(state.currentView && state.currentView.type === 'full')) {
       renderPreview();
     }
+
+    // update counters using the mainText we computed above and the current editor tile (if any)
+    try {
+      const currentText = (state.currentView && state.currentView.type === 'tile') ? (editor.value || '') : '';
+      updateCounters(text || '', currentText);
+    } catch (e) { /* ignore counter errors */ }
 }
 
  // sort change handlers
@@ -1222,6 +1292,29 @@ async function refreshTiles() {
         try { currentStoryTitle.textContent = `${state.currentStory} - ${t.title || '(untitled)'}`; } catch (e) {}
         setEditorEnabled(true);
         renderPreview();
+
+        // update counters immediately for the selected tile and total project text
+        (async () => {
+          try {
+            // build combined text from all tiles (total)
+            const listRes = await api.listTiles(state.currentStory).catch(() => null);
+            const tilesAll = (listRes && listRes.ok && Array.isArray(listRes.tiles)) ? listRes.tiles : [];
+            if (tilesAll.length === 0) {
+              updateCounters('', editor.value || '');
+              return;
+            }
+            const parts = await Promise.all(tilesAll.map(async tt => {
+              try {
+                const r = await api.getTile(state.currentStory, tt.id).catch(() => null);
+                return (r && r.ok) ? (r.content || '') : '';
+              } catch (e) { return ''; }
+            }));
+            const combined = parts.filter(Boolean).join('\n\n');
+            updateCounters(combined, editor.value || '');
+          } catch (err) {
+            console.warn('Failed to update counters on tile click', err);
+          }
+        })();
       });
 
       const actions = document.createElement('div');

@@ -742,6 +742,8 @@ function closeCurrentStory() {
   if (storyTagsEl && storyTagsEl.parentNode) storyTagsEl.parentNode.removeChild(storyTagsEl);
   // disable editor area when no story is open
   setEditorEnabled(false);
+  // reset counters when no story is opened
+  try { updateCounters('', ''); } catch (e) { /* ignore */ }
   // refresh the stories list so the left menu updates (non-open stories appear grey)
   refreshStories();
 }

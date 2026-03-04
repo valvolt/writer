@@ -68,9 +68,16 @@ main#main{flex:1;display:flex;flex-direction:column;min-width:0;padding:16px}
 header{display:flex;align-items:center;justify-content:space-between;gap:12px}
 header h1{margin:0;font-size:18px}
 #editorArea{display:flex;gap:12px;flex:1;min-height:0;margin-top:12px}
-#editor{flex:1;min-width:0;height:100%;resize:none;padding:12px;border:1px solid #e6e7ee;border-radius:6px;background:#fff;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-.preview{flex:1;min-width:0;height:100%;overflow:auto;padding:12px;border:1px solid #e6e7ee;border-radius:6px;background:#fff}
+#editor{flex:1;min-width:0;resize:none;padding:12px;border:1px solid #e6e7ee;border-radius:6px;background:#fff;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.preview{flex:1;min-width:0;overflow:auto;padding:12px;border:1px solid #e6e7ee;border-radius:6px;background:#fff}
 .preview p{margin:0 0 8px 0}
+
+/* Ensure editor column and preview align bottoms:
+   keep both sides as flex children with min-height:0 so they stretch equally.
+   Make the textarea flex to fill the editor column (counters sit below it). */
+#editorArea > .editor-column { display:flex; flex-direction:column; flex:1; min-height:0; }
+#editorArea > .editor-column textarea { flex:1; min-height:0; height:auto; }
+#editorArea > .preview { align-self:stretch; min-height:0; }
 button{cursor:pointer}
 
 a.entity-hl{color:var(--accent-blue);text-decoration:underline;cursor:default}

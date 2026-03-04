@@ -78,10 +78,11 @@
       </header>
 
       <section id="editorArea">
-        <textarea id="editor" placeholder="Write your story here..."></textarea>
-        <div id="editorCounters" class="small" style="margin-top:8px;display:flex;justify-content:space-between;gap:8px;">
-          <div>Words: <span id="wc-total">0</span> / <span id="wc-current">0</span></div>
-          <div>Characters: <span id="cc-total">0</span> / <span id="cc-current">0</span></div>
+        <div class="editor-column" style="display:flex;flex-direction:column;flex:1;min-width:0">
+          <textarea id="editor" placeholder="Write your story here..." style="flex:1;min-width:0;height:100%;"></textarea>
+          <div id="editorCounters" class="small" style="margin-top:8px;">
+            Words: <span id="wc-total">0</span> / <span id="wc-current">0</span> &nbsp;&ndash;&nbsp; Characters: <span id="cc-total">0</span> / <span id="cc-current">0</span>
+          </div>
         </div>
         <div id="preview" class="preview"></div>
       </section>

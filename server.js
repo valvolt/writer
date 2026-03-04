@@ -138,7 +138,19 @@ function ensureStoryStructure(name) {
   if (!fs.existsSync(base)) {
     fs.mkdirSync(base, { recursive: true });
   }
-  // we no longer generate a top-level text.md file; highlights.md remains
+
+  // Create a minimal project.json for explicit metadata (helps future features)
+  const projectMetaPath = path.join(base, 'project.json');
+  if (!fs.existsSync(projectMetaPath)) {
+    try {
+      const meta = { name: name, createdAt: new Date().toISOString(), version: 1 };
+      fs.writeFileSync(projectMetaPath, JSON.stringify(meta, null, 2), 'utf8');
+    } catch (e) {
+      // ignore write errors here; higher-level handlers will surface problems
+    }
+  }
+
+  // highlights.md remains (do not create text.md)
   const files = ['highlights.md'];
   for (const f of files) {
     const fp = path.join(base, f);
@@ -357,32 +369,31 @@ app.post('/api/stories/:name/rename', requireAuth, (req, res) => {
   }
 });
 
-// Get story content (text, characters, locations) and image lists
-app.get('/api/stories/:name', requireAuth, (req, res) => {
-  const name = req.params.name;
-  const { userId, base } = resolveBaseFlexible(req, name);
-  if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
-  try {
-    const textPath = path.join(base, 'text.md');
-    const text = fs.existsSync(textPath) ? fs.readFileSync(textPath, 'utf8') : '';
-    const highlights = fs.readFileSync(path.join(base, 'highlights.md'), 'utf8');
-    const imagesDir = path.join(base, 'images');
-    const imageList = {};
-    if (fs.existsSync(imagesDir)) {
-      for (const sub of ['highlights']) {
-        const p = path.join(imagesDir, sub);
-        if (!fs.existsSync(p)) {
-          imageList[sub] = [];
-        } else {
-          imageList[sub] = fs.readdirSync(p).map(fn => `/stories/${safeName(name)}/images/${sub}/${encodeURIComponent(fn)}`);
-        }
-      }
-    }
-    res.json({ ok: true, name, text, highlights, images: imageList });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
+ // Get story content (characters, locations) and image lists
+ app.get('/api/stories/:name', requireAuth, (req, res) => {
+   const name = req.params.name;
+   const { userId, base } = resolveBaseFlexible(req, name);
+   if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+   try {
+     const highlightsPath = path.join(base, 'highlights.md');
+     const highlights = fs.existsSync(highlightsPath) ? fs.readFileSync(highlightsPath, 'utf8') : '';
+     const imagesDir = path.join(base, 'images');
+     const imageList = {};
+     if (fs.existsSync(imagesDir)) {
+       for (const sub of ['highlights']) {
+         const p = path.join(imagesDir, sub);
+         if (!fs.existsSync(p)) {
+           imageList[sub] = [];
+         } else {
+           imageList[sub] = fs.readdirSync(p).map(fn => `/stories/${safeName(name)}/images/${sub}/${encodeURIComponent(fn)}`);
+         }
+       }
+     }
+     res.json({ ok: true, name, highlights, images: imageList });
+   } catch (err) {
+     res.status(500).json({ ok: false, error: err.message });
+   }
+ });
 
  // Tiles API: minimal per-story tile storage (stories/<name>/tiles/, stories/<name>/tiles/tiles.json)
 app.get('/api/stories/:name/tiles', requireAuth, (req, res) => {
@@ -658,6 +669,28 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
     const outPath = path.join(publishedDir, `${safeName(name)}.md`);
     // prepend story title as a markdown heading before aggregated content
     const outContent = `# ${name}\n\n${agg}`;
+
+    // Create snapshots directory and write a timestamped snapshot (do NOT touch legacy text.md files)
+    try {
+      const snapsDir = path.join(base, 'snapshots');
+      if (!fs.existsSync(snapsDir)) fs.mkdirSync(snapsDir, { recursive: true });
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      const snapName = `${safeName(name)}-${ts}.md`;
+      const snapPath = path.join(snapsDir, snapName);
+      try { fs.writeFileSync(snapPath, outContent, 'utf8'); } catch (e) { /* ignore snapshot write failure */ }
+
+      // update snapshots/meta.json (append simple metadata)
+      const metaPath = path.join(snapsDir, 'meta.json');
+      let meta = [];
+      try { meta = fs.existsSync(metaPath) ? JSON.parse(fs.readFileSync(metaPath, 'utf8') || '[]') : []; } catch (e) { meta = []; }
+      try {
+        meta.push({ file: snapName, timestamp: new Date().toISOString(), tileCount: tiles.length, size: Buffer.byteLength(outContent, 'utf8') });
+        fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf8');
+      } catch (e) { /* ignore meta write failure */ }
+    } catch (e) {
+      // ignore snapshot directory failures - publishing should continue even if snapshots fail
+    }
+
     try { fs.writeFileSync(outPath, outContent, 'utf8'); } catch (e) { return res.status(500).json({ ok: false, error: 'failed to write published file' }); }
     // Return a friendly public route under /published/:userId/:storyId instead of exposing the raw file path.
     // Use the resolved userId (from resolveUserAndBase above) and the story name.

@@ -86,14 +86,8 @@ async function updatePublishButtonState() {
     // If tiles call failed or returned empty, fall back to checking story text (state.storyData.text)
     const tiles = (listRes && listRes.ok && Array.isArray(listRes.tiles)) ? listRes.tiles : [];
 
-    // If there are no tiles, consider storyData.text as a potential publishable source
+  // If there are no tiles, publishing is not allowed (tiles are the single source of truth)
     if (tiles.length === 0) {
-      const textContent = (state.storyData && state.storyData.text) ? String(state.storyData.text).trim() : '';
-      // if main text is non-empty, allow publish
-      if (textContent.length > 0) {
-        publishBtn.disabled = false;
-        return;
-      }
       publishBtn.disabled = true;
       return;
     }
@@ -125,7 +119,7 @@ const state = {
   storyData: null, // result of GET /api/stories/:name
   // currentView indicates what the editor is showing:
   // { type: 'text'|'highlights', name?: string }
-  currentView: { type: 'text', name: null },
+  currentView: { type: null, name: null },
   // activeTagFilter holds the currently selected tag used to filter highlight lists (null = no filter)
   activeTagFilter: null
 };
@@ -668,7 +662,7 @@ currentStoryTitle.addEventListener('blur', async () => {
 function closeCurrentStory() {
   state.currentStory = null;
   state.storyData = null;
-  state.currentView = { type: 'text', name: null };
+  state.currentView = { type: null, name: null };
   currentStoryTitle.textContent = 'No story opened';
   editor.value = '';
   // clear preview so any rendered tags/pills are removed when closing
@@ -773,20 +767,7 @@ async function saveMainText() {
     return;
   }
 
-  if (view === 'text') {
-    // saving main story text (replace entire text.md)
-    const content = editor.value;
-    const res = await api.saveFile(state.currentStory, 'text.md', content);
-    if (!res || !res.ok) {
-      console.warn('saveMainText: failed to save text.md', res && res.error);
-      return;
-    }
-    const updated = await api.getStory(state.currentStory);
-    if (updated && updated.ok) state.storyData = updated;
-    refreshEntityLists();
-    console.log('Saved text.md');
-    return;
-  }
+  
 
   // saving an entity (highlights.md) — merge edited section into the existing file (preserving other sections)
   const filename = 'highlights.md';
@@ -1272,8 +1253,8 @@ async function refreshTiles() {
         if (!rr || !rr.ok) return alert(rr && rr.error ? rr.error : 'Delete failed');
         // if currently editing this tile, close editor
         if (state.currentView && state.currentView.type === 'tile' && state.currentView.id === t.id) {
-          state.currentView = { type: 'text', name: null };
-          editor.value = state.storyData && state.storyData.text ? state.storyData.text : '';
+          state.currentView = { type: null, name: null };
+          editor.value = '';
           // restore header to just the story name
           try { currentStoryTitle.textContent = state.currentStory || 'No story opened'; } catch (e) {}
           renderPreview();

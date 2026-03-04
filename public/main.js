@@ -121,7 +121,9 @@ const state = {
   // { type: 'text'|'highlights', name?: string }
   currentView: { type: null, name: null },
   // activeTagFilter holds the currently selected tag used to filter highlight lists (null = no filter)
-  activeTagFilter: null
+  activeTagFilter: null,
+  // bubbleTag: single-tag "bubble" ordering (non-destructive) — when set, highlights containing this tag are shown first
+  bubbleTag: null
 };
 // autosave timer handle (debounced saves while typing)
 let autosaveTimer = null;
@@ -1064,14 +1066,29 @@ document.addEventListener('keydown', (e) => {
     // for story-level tags, extract from the main story text (not from highlights)
     const storyTagsArr = extractTagsFromText(mainText);
 
-    // If a tag filter is active, only show highlights that include that tag
-    const filteredArr = state.activeTagFilter
-      ? arr.filter(item => {
+    // If a strict filter is active, only show highlights that include that tag.
+    // Otherwise, if a bubbleTag is set, reorder the list so matching items appear first (stable).
+    let filteredArr;
+    if (state.activeTagFilter) {
+      filteredArr = arr.filter(item => {
         const desc = (hls && hls[item.name] && typeof hls[item.name].desc === 'string') ? hls[item.name].desc : '';
         const tags = extractTagsFromText(desc);
         return tags.includes(state.activeTagFilter);
-      })
-      : arr;
+      });
+    } else if (state.bubbleTag) {
+      // stable partition: matches first, then others in original sort order
+      const matches = [];
+      const others = [];
+      for (const item of arr) {
+        const desc = (hls && hls[item.name] && typeof hls[item.name].desc === 'string') ? hls[item.name].desc : '';
+        const tags = extractTagsFromText(desc);
+        if (tags.includes(state.bubbleTag)) matches.push(item);
+        else others.push(item);
+      }
+      filteredArr = matches.concat(others);
+    } else {
+      filteredArr = arr;
+    }
 
     for (const item of filteredArr) {
       const li = document.createElement('li');
@@ -1141,16 +1158,19 @@ document.addEventListener('keydown', (e) => {
           tspan.style.color = st.color;
         }
         tspan.style.marginLeft = '6px';
-        // clicking a tag toggles the active filter; stopPropagation so the li click doesn't fire
+        // clicking a tag "bubbles" that tag to the top of the highlights list (non-destructive ordering)
         tspan.addEventListener('click', (ev) => {
           ev.stopPropagation();
-          if (state.activeTagFilter === tag) state.activeTagFilter = null;
-          else state.activeTagFilter = tag;
-          // re-render lists using the new filter
+          if (!state.currentStory) return;
+          // set bubbleTag (do not toggle off when clicking same tag)
+          state.bubbleTag = tag;
+          // clear strict filter if any (we only support bubbling now)
+          state.activeTagFilter = null;
+          // re-render lists using new bubble state
           refreshEntityLists(mainText);
         });
-        // visually mark selected tag
-        if (state.activeTagFilter === tag) tspan.classList.add('selected');
+        // visually mark bubbled tag (less prominent than .selected)
+        if (state.bubbleTag === tag) tspan.classList.add('bubbled');
         li.appendChild(tspan);
       }
 
@@ -1177,14 +1197,15 @@ document.addEventListener('keydown', (e) => {
         }
         tspan.style.marginLeft = '6px';
         tspan.style.marginBottom = '0';
-        // clicking story tag also toggles the filter
+        // clicking story tag bubbles that tag to the top of the highlights list
         tspan.addEventListener('click', (ev) => {
           ev.stopPropagation();
-          if (state.activeTagFilter === tag) state.activeTagFilter = null;
-          else state.activeTagFilter = tag;
+          if (!state.currentStory) return;
+          state.bubbleTag = tag;
+          state.activeTagFilter = null;
           refreshEntityLists(mainText);
         });
-        if (state.activeTagFilter === tag) tspan.classList.add('selected');
+        if (state.bubbleTag === tag) tspan.classList.add('bubbled');
         storyTagsEl.appendChild(tspan);
       }
     }
@@ -1256,7 +1277,12 @@ document.addEventListener('keydown', (e) => {
 }
 
  // sort change handlers
- if (hlSort) hlSort.addEventListener('change', () => refreshEntityLists());
+ if (hlSort) hlSort.addEventListener('change', () => {
+   // when the user changes sorting (A→Z / By count), remove any active bubbled tag
+   // so the list is fully resorted according to the selected sort mode.
+   try { state.bubbleTag = null; } catch (e) { /* ignore */ }
+   refreshEntityLists();
+ });
 
 /* --- Tiles UI & handlers --- */
 async function refreshTiles() {

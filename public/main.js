@@ -492,7 +492,7 @@ function simpleMarkdownToHtml(md) {
     }
 
     // list items
-    const li = raw.match(/^\s*[-*]\s+(.*)/);
+    const li = raw.match(/^\s*\*\s+(.*)/);
     if (li) {
       if (!inList) { html += '<ul>'; inList = true; }
       let content = escapeHtml(li[1]);

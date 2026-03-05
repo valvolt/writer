@@ -785,6 +785,12 @@ function closeCurrentStory() {
   setEditorEnabled(false);
   // reset counters when no story is opened
   try { updateCounters('', ''); } catch (e) { /* ignore */ }
+  // ensure sidebar reflects that no story is open so storiesPane can expand
+  try {
+    const sidebarEl = document.getElementById('sidebar');
+    if (sidebarEl) sidebarEl.classList.remove('story-open');
+  } catch (e) { /* ignore */ }
+
   // refresh the stories list so the left menu updates (non-open stories appear grey)
   refreshStories();
 }
@@ -807,6 +813,11 @@ async function openStory(name) {
   currentStoryTitle.textContent = name;
   // keep editor disabled by default when opening a story
   setEditorEnabled(false);
+  // mark sidebar as having an open story so splitter heights remain in effect
+  try {
+    const sidebarEl = document.getElementById('sidebar');
+    if (sidebarEl) sidebarEl.classList.add('story-open');
+  } catch (e) { /* ignore */ }
 
   // ensure tiles and highlights areas visible and load tiles; render concatenated tiles into preview
   if (tilesSection) tilesSection.style.display = 'block';

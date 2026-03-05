@@ -147,6 +147,24 @@ a.entity-loc{color:var(--accent-green);text-decoration:underline;cursor:pointer}
   padding: 2px 4px;
 }
 
+/* When no story is open, allow the stories pane to expand to fill the sidebar.
+   The sidebar gains/removes the "story-open" class from JS when opening/closing a story.
+   These rules override the splitter-imposed heights so the stories list can populate
+   the full left menu when nothing is open. */
+#sidebar:not(.story-open) #storiesPane {
+  height: auto !important;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* collapse tiles/highlights panes visually when no story is open so they don't consume fixed height */
+#sidebar:not(.story-open) #tilesPane,
+#sidebar:not(.story-open) #highlightsPane {
+  height: auto !important;
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
 /* Tiles drag-and-drop insertion indicators */
 .tile-item {
   position: relative;

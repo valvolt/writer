@@ -1915,8 +1915,8 @@ function openEntityInEditor(type, id, title) {
         return;
       }
       state.currentView = { type: 'highlight', id: id };
-      // load the file content (keeps heading if present)
-      editor.value = got.content || composeSection(got.title || title, '');
+      // load the file content as-is (do NOT auto-insert a heading when content is empty)
+      editor.value = got.content || '';
       // update header to show "story - highlight title"
       try { currentStoryTitle.textContent = `${state.currentStory} - ${got.title || title}`; } catch (e) {}
       setEditorEnabled(true);
@@ -2049,19 +2049,20 @@ function openNewEntityModal(type, name) {
 async function createEntityAndOpen(type, name, openAfter = true) {
   if (!state.currentStory) throw new Error('Open a story first');
   // create a per-highlight markdown file via API
-  try {
-    const res = await api.createHighlight(state.currentStory, name, `## ${name}\n\n`);
-    if (!res || !res.ok) throw new Error(res && res.error ? res.error : 'Create failed');
-    // refresh highlights list
-    await refreshEntityLists();
-    if (openAfter) {
-      // open newly created highlight
-      openEntityInEditor('highlights', res.id, res.title || name);
+    try {
+      // Create the highlight with empty content by default (highlights.json holds the title).
+      const res = await api.createHighlight(state.currentStory, name, '');
+      if (!res || !res.ok) throw new Error(res && res.error ? res.error : 'Create failed');
+      // refresh highlights list
+      await refreshEntityLists();
+      if (openAfter) {
+        // open newly created highlight
+        openEntityInEditor('highlights', res.id, res.title || name);
+      }
+    } catch (err) {
+      console.error('createEntityAndOpen failed', err);
+      throw err;
     }
-  } catch (err) {
-    console.error('createEntityAndOpen failed', err);
-    throw err;
-  }
 }
 
 /* clicking highlighted entity no longer opens the editor.

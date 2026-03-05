@@ -609,15 +609,36 @@ async function refreshStories() {
   const res = await api.listStories();
   if (!res || !res.ok) return;
  storyList.innerHTML = '';
-  for (const s of res.stories) {
+
+  // Normalize stories into {id, name} objects and sort alphabetically by name.
+  const storiesArr = (res.stories || []).map(s => {
+    const id = (typeof s === 'string') ? s : (s.id || s.name || '');
+    const name = (typeof s === 'string') ? s : (s.name || s.id || '');
+    return { id, name };
+  });
+
+  storiesArr.sort((a, b) => a.name.localeCompare(b.name));
+
+  // If a story is currently open, bring it to the front (but keep others alphabetized).
+  if (state.currentStory) {
+    const idx = storiesArr.findIndex(x => x.id === state.currentStory);
+    if (idx > 0) {
+      const [item] = storiesArr.splice(idx, 1);
+      storiesArr.unshift(item);
+    }
+  }
+
+  for (const s of storiesArr) {
     const li = document.createElement('li');
     li.className = 'story-item';
     const nameSpan = document.createElement('span');
-    // support server returning either plain strings or objects { id, name }
-    const storyId = (typeof s === 'string') ? s : (s.id || s.name || '');
-    const displayName = (typeof s === 'string') ? s : (s.name || s.id || '');
+
+    const storyId = s.id;
+    const displayName = s.name;
+
     nameSpan.textContent = displayName;
     nameSpan.dataset.name = storyId;
+
     // apply explicit classes so styling is consistent and easy to override
     if (state.currentStory) {
       if (state.currentStory !== storyId) {
@@ -632,6 +653,7 @@ async function refreshStories() {
       nameSpan.classList.remove('story-item--muted');
       nameSpan.classList.remove('story-item--active');
     }
+
     nameSpan.addEventListener('click', () => openStory(storyId));
     li.appendChild(nameSpan);
 

@@ -113,8 +113,80 @@ app.get('/api/auth-status', (req, res) => {
    }
  });
  
- // serve story images statically (original behavior)
- app.use('/stories', express.static(STORIES_ROOT));
+ // serve story images via guarded route (do NOT expose STORIES_ROOT directly).
+ // This endpoint replaces the previous app.use('/stories', ...) static mount so we can
+ // enforce "published-or-owner" access control for any file under /stories/...
+ //
+ // Example incoming paths this handler will accept:
+ //  - /stories/<userId>/<storyId>/images/<sub>/<file>
+ //  - /stories/<userId>/<storyId>/published/<name>.md
+ //  - any other path under /stories/... that maps to STORIES_ROOT/<...>
+ //
+ // The handler works by resolving the requested path under STORIES_ROOT, ensuring
+ // it is inside that directory, then deciding access based on:
+ //  - published file exists (public)
+ //  - or authenticated request and requester resolves to the same userId (owner)
+ //
+ function isPublished(userId, storyId) {
+   try {
+     if (!userId || !storyId) return false;
+     const pubPath = path.join(STORIES_ROOT, userId, safeName(storyId), 'published', `${safeName(storyId)}.md`);
+     return fs.existsSync(pubPath);
+   } catch (e) { return false; }
+ }
+ 
+ function canAccessPublishedOrOwner(req, userId, storyId) {
+   // published content is public
+   try {
+     if (isPublished(userId, storyId)) return true;
+     // otherwise require authenticated owner
+     if (req && req.oidc && req.oidc.isAuthenticated && req.oidc.isAuthenticated()) {
+       // resolve auth userId (may create user folder if not present - acceptable here)
+       try {
+         const auth = resolveUserIdFromReq(req);
+         if (auth && auth.userId && userId && auth.userId === userId) return true;
+       } catch (e) {
+         return false;
+       }
+     }
+   } catch (e) { /* fall through */ }
+   return false;
+ }
+ 
+ app.get('/stories/*', (req, res) => {
+   try {
+     // req.params[0] contains the wildcard path after /stories/
+     const rel = req.params[0] || '';
+     // normalize and prevent path traversal
+     const normalized = path.normalize(rel).replace(/^(\.\.(\/|\\|$))+/, '');
+     const full = path.join(STORIES_ROOT, normalized);
+     // ensure resolved path is inside STORIES_ROOT
+     const rootResolved = path.resolve(STORIES_ROOT) + path.sep;
+     const fullResolved = path.resolve(full);
+     if (!fullResolved.startsWith(rootResolved)) return res.status(404).send('not found');
+     if (!fs.existsSync(fullResolved)) return res.status(404).send('not found');
+ 
+     // Determine probable userId and storyId from the path segments if available:
+     const parts = normalized.split(path.sep).filter(Boolean);
+     const userId = parts.length >= 1 ? parts[0] : null;
+     const storyId = parts.length >= 2 ? parts[1] : null;
+ 
+     // If we can determine a userId/storyId, enforce published-or-owner.
+     // If not (edge cases), be conservative and deny access unless file is in a published folder.
+     if (userId && storyId) {
+       if (!canAccessPublishedOrOwner(req, userId, storyId)) return res.status(403).send('forbidden');
+     } else {
+       // fallback: if file path contains "/published/" allow, else deny
+       if (!normalized.includes(path.join('published', '/'))) {
+         return res.status(403).send('forbidden');
+       }
+     }
+ 
+     return res.sendFile(fullResolved);
+   } catch (e) {
+     return res.status(500).send('error');
+   }
+ });
 
 function safeName(name) {
   // very simple sanitization: remove path separators

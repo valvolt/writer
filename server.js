@@ -150,13 +150,10 @@ function ensureStoryStructure(name) {
     }
   }
 
-  // highlights.md remains (do not create text.md)
-  const files = ['highlights.md'];
-  for (const f of files) {
-    const fp = path.join(base, f);
-    if (!fs.existsSync(fp)) {
-      fs.writeFileSync(fp, '', 'utf8');
-    }
+  // ensure highlights directory exists (per-highlight markdown files)
+  const highlightsDir = path.join(base, 'highlights');
+  if (!fs.existsSync(highlightsDir)) {
+    fs.mkdirSync(highlightsDir, { recursive: true });
   }
 
   // create images subfolders (only highlights now)
@@ -275,12 +272,10 @@ function ensureUserStoryStructure(userPath, storyName) {
   if (!fs.existsSync(base)) {
     fs.mkdirSync(base, { recursive: true });
   }
-  const files = ['highlights.md'];
-  for (const f of files) {
-    const fp = path.join(base, f);
-    if (!fs.existsSync(fp)) {
-      fs.writeFileSync(fp, '', 'utf8');
-    }
+  // ensure highlights directory exists (per-highlight markdown files)
+  const highlightsDir = path.join(base, 'highlights');
+  if (!fs.existsSync(highlightsDir)) {
+    fs.mkdirSync(highlightsDir, { recursive: true });
   }
   const imgs = path.join(base, 'images');
   const imgSub = ['highlights'];
@@ -374,26 +369,204 @@ app.post('/api/stories/:name/rename', requireAuth, (req, res) => {
    const name = req.params.name;
    const { userId, base } = resolveBaseFlexible(req, name);
    if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
-   try {
-     const highlightsPath = path.join(base, 'highlights.md');
-     const highlights = fs.existsSync(highlightsPath) ? fs.readFileSync(highlightsPath, 'utf8') : '';
-     const imagesDir = path.join(base, 'images');
-     const imageList = {};
-     if (fs.existsSync(imagesDir)) {
-       for (const sub of ['highlights']) {
-         const p = path.join(imagesDir, sub);
-         if (!fs.existsSync(p)) {
-           imageList[sub] = [];
-         } else {
-           imageList[sub] = fs.readdirSync(p).map(fn => `/stories/${safeName(name)}/images/${sub}/${encodeURIComponent(fn)}`);
-         }
-       }
-     }
-     res.json({ ok: true, name, highlights, images: imageList });
-   } catch (err) {
-     res.status(500).json({ ok: false, error: err.message });
-   }
+    try {
+      // Aggregate per-highlight files from the highlights/ directory (no more highlights.md)
+      const highlightsDir = path.join(base, 'highlights');
+      let highlights = '';
+      if (fs.existsSync(highlightsDir)) {
+        // read files in stable order (by mtime then name) to produce consistent concatenation
+        const files = fs.readdirSync(highlightsDir, { withFileTypes: true })
+          .filter(d => d.isFile() && d.name.endsWith('.md'))
+          .map(d => d.name);
+        // sort files by name for determinism
+        files.sort();
+        for (const fn of files) {
+          try {
+            const fp = path.join(highlightsDir, fn);
+            const txt = fs.readFileSync(fp, 'utf8') || '';
+            // ensure sections are separated by blank lines
+            highlights += (highlights ? '\n\n' : '') + txt.trim();
+          } catch (e) {
+            // ignore individual highlight read errors
+          }
+        }
+      } else {
+        highlights = '';
+      }
+
+      const imagesDir = path.join(base, 'images');
+      const imageList = {};
+      if (fs.existsSync(imagesDir)) {
+        for (const sub of ['highlights']) {
+          const p = path.join(imagesDir, sub);
+          if (!fs.existsSync(p)) {
+            imageList[sub] = [];
+          } else {
+            imageList[sub] = fs.readdirSync(p).map(fn => `/stories/${safeName(name)}/images/${sub}/${encodeURIComponent(fn)}`);
+          }
+        }
+      }
+      res.json({ ok: true, name, highlights, images: imageList });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
  });
+
+/*
+  Highlights API - per-highlight markdown files stored under:
+    stories/<userId>/<story>/highlights/<id>.md
+
+  Endpoints:
+    GET    /api/stories/:name/highlights           -> list highlights
+    GET    /api/stories/:name/highlights/:id       -> get highlight content
+    POST   /api/stories/:name/highlights           -> create highlight { title, content }
+    POST   /api/stories/:name/highlights/:id/save  -> save content { content }
+    POST   /api/stories/:name/highlights/:id/rename -> rename { newName }
+    DELETE /api/stories/:name/highlights/:id      -> delete highlight
+*/
+app.get('/api/stories/:name/highlights', requireAuth, (req, res) => {
+  const name = req.params.name;
+  try {
+    const { userId, base } = resolveBaseFlexible(req, name);
+    if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+    const dir = path.join(base, 'highlights');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const files = fs.readdirSync(dir, { withFileTypes: true }).filter(d => d.isFile() && d.name.endsWith('.md')).map(d => d.name);
+    const list = files.map(fn => {
+      const id = path.basename(fn, '.md');
+      const fp = path.join(dir, fn);
+      let title = id;
+      try {
+        const txt = fs.readFileSync(fp, 'utf8') || '';
+        const m = txt.match(/^\s*#{1,6}\s+(.*)$/m);
+        if (m && m[1]) title = m[1].trim();
+      } catch (e) { /* ignore */ }
+      let mtime = 0;
+      try { mtime = fs.statSync(fp).mtimeMs || 0; } catch (e) {}
+      return { id, title, mtime };
+    });
+    res.json({ ok: true, highlights: list });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get('/api/stories/:name/highlights/:id', requireAuth, (req, res) => {
+  const name = req.params.name;
+  const id = req.params.id;
+  try {
+    const { userId, base } = resolveBaseFlexible(req, name);
+    if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+    const dir = path.join(base, 'highlights');
+    const filename = path.join(dir, id + '.md');
+    if (!fs.existsSync(filename)) return res.status(404).json({ ok: false, error: 'highlight not found' });
+    const content = fs.readFileSync(filename, 'utf8');
+    // derive title from first heading if present
+    const m = content.match(/^\s*#{1,6}\s+(.*)$/m);
+    const title = (m && m[1]) ? m[1].trim() : id;
+    res.json({ ok: true, id, title, content });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/stories/:name/highlights', requireAuth, (req, res) => {
+  const name = req.params.name;
+  const { title, content } = req.body || {};
+  if (!title) return res.status(400).json({ ok: false, error: 'title is required' });
+  try {
+    const { userId, base } = resolveBaseFlexible(req, name);
+    if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+    const dir = path.join(base, 'highlights');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    let id = safeName(title) || String(Date.now());
+    // ensure uniqueness
+    let candidate = id;
+    let suffix = 1;
+    while (fs.existsSync(path.join(dir, candidate + '.md'))) {
+      candidate = `${id}-${suffix++}`;
+    }
+    id = candidate;
+    // ensure content has a title heading
+    let out = (typeof content === 'string') ? content : '';
+    if (!/^\s*#{1,6}\s+/.test(out)) {
+      out = `## ${title}\n\n` + out;
+    } else {
+      // replace first heading text with title to keep canonical identity
+      out = out.replace(/^\s*#{1,6}\s+.*$/m, `## ${title}`);
+    }
+    fs.writeFileSync(path.join(dir, id + '.md'), out, 'utf8');
+    res.json({ ok: true, id, title });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/stories/:name/highlights/:id/save', requireAuth, (req, res) => {
+  const name = req.params.name;
+  const id = req.params.id;
+  const { content } = req.body || {};
+  if (typeof content !== 'string') return res.status(400).json({ ok: false, error: 'content required' });
+  try {
+    const { userId, base } = resolveBaseFlexible(req, name);
+    if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+    const dir = path.join(base, 'highlights');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const filename = path.join(dir, id + '.md');
+    fs.writeFileSync(filename, content, 'utf8');
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/stories/:name/highlights/:id/rename', requireAuth, (req, res) => {
+  const name = req.params.name;
+  const id = req.params.id;
+  const { newName } = req.body || {};
+  if (!newName) return res.status(400).json({ ok: false, error: 'newName is required' });
+  try {
+    const { userId, base } = resolveBaseFlexible(req, name);
+    if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+    const dir = path.join(base, 'highlights');
+    const from = path.join(dir, id + '.md');
+    if (!fs.existsSync(from)) return res.status(404).json({ ok: false, error: 'highlight not found' });
+    const newId = safeName(newName) || String(Date.now());
+    let candidate = newId;
+    let suffix = 1;
+    while (fs.existsSync(path.join(dir, candidate + '.md'))) {
+      candidate = `${newId}-${suffix++}`;
+    }
+    const to = path.join(dir, candidate + '.md');
+    // update file content heading if present, otherwise prepend heading
+    let content = fs.readFileSync(from, 'utf8') || '';
+    if (/^\s*#{1,6}\s+/.test(content)) {
+      content = content.replace(/^\s*#{1,6}\s+.*$/m, `## ${newName}`);
+    } else {
+      content = `## ${newName}\n\n` + content;
+    }
+    fs.writeFileSync(from, content, 'utf8');
+    fs.renameSync(from, to);
+    res.json({ ok: true, id: candidate, title: newName });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.delete('/api/stories/:name/highlights/:id', requireAuth, (req, res) => {
+  const name = req.params.name;
+  const id = req.params.id;
+  try {
+    const { userId, base } = resolveBaseFlexible(req, name);
+    if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+    const dir = path.join(base, 'highlights');
+    const filename = path.join(dir, id + '.md');
+    if (fs.existsSync(filename)) fs.unlinkSync(filename);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
 
  // Tiles API: minimal per-story tile storage (stories/<name>/tiles/, stories/<name>/tiles/tiles.json)
 app.get('/api/stories/:name/tiles', requireAuth, (req, res) => {
@@ -540,14 +713,54 @@ app.delete('/api/stories/:name/tiles/:id', requireAuth, (req, res) => {
    if (!file || !content) {
      return res.status(400).json({ ok: false, error: 'file and content required' });
    }
-   // only highlights.md may be saved now; text.md is no longer generated/edited
-   if (!['highlights.md'].includes(file)) {
+   // Only accept saves for the legacy aggregated highlights endpoint to allow migration.
+   // When clients POST highlights.md, parse the provided aggregated markdown into per-highlight files
+   // stored under highlights/<id>.md. This migrates legacy bulk edits into the per-file model.
+   if (file !== 'highlights.md') {
      return res.status(400).json({ ok: false, error: 'invalid file' });
    }
   const { userId, base } = resolveUserAndBase(req, name);
   if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
   try {
-    fs.writeFileSync(path.join(base, file), content, 'utf8');
+    const highlightsDir = path.join(base, 'highlights');
+    if (!fs.existsSync(highlightsDir)) fs.mkdirSync(highlightsDir, { recursive: true });
+
+    // Split the aggregated markdown into sections using leading "## " headings as anchors.
+    // This mirrors the client-side parseEntitySectionsArray behavior.
+    const parts = String(content).split(/\n(?=##\s+)/g).filter(Boolean);
+    const incomingIds = new Set();
+    for (const p of parts) {
+      const lines = p.split('\n');
+      if (lines.length === 0) continue;
+      const titleLine = lines[0];
+      const title = titleLine.replace(/^#{1,6}\s*/, '').trim();
+      const desc = lines.slice(1).join('\n');
+      if (!title) continue;
+      const id = safeName(title) || String(Date.now());
+      incomingIds.add(id);
+      const out = `## ${title}\n\n${(desc || '').replace(/^\n+/, '').replace(/\n+$/, '')}`;
+      try {
+        fs.writeFileSync(path.join(highlightsDir, id + '.md'), out, 'utf8');
+      } catch (e) {
+        // ignore per-file write errors but continue processing others
+      }
+    }
+
+    // Remove any highlight files that were not present in the incoming aggregated content
+    try {
+      const existing = fs.readdirSync(highlightsDir, { withFileTypes: true })
+        .filter(d => d.isFile() && d.name.endsWith('.md'))
+        .map(d => d.name);
+      for (const fn of existing) {
+        const id = path.basename(fn, '.md');
+        if (!incomingIds.has(id)) {
+          try { fs.unlinkSync(path.join(highlightsDir, fn)); } catch (e) { /* ignore unlink errors */ }
+        }
+      }
+    } catch (e) {
+      // ignore cleanup failures
+    }
+
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });

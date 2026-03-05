@@ -51,7 +51,27 @@ const api = {
   }).then(r => r.json())
 };
 
-// Publish button state checker (global)
+// Highlights API client helpers
+api.listHighlights = (name) => fetch(`/api/stories/${encodeURIComponent(name)}/highlights`).then(r => r.json());
+api.getHighlight = (name, id) => fetch(`/api/stories/${encodeURIComponent(name)}/highlights/${encodeURIComponent(id)}`).then(r => r.json());
+api.createHighlight = (name, title, content = '') => fetch(`/api/stories/${encodeURIComponent(name)}/highlights`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ title, content })
+}).then(r => r.json());
+api.saveHighlight = (name, id, content) => fetch(`/api/stories/${encodeURIComponent(name)}/highlights/${encodeURIComponent(id)}/save`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ content })
+}).then(r => r.json());
+api.renameHighlight = (name, id, newName) => fetch(`/api/stories/${encodeURIComponent(name)}/highlights/${encodeURIComponent(id)}/rename`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ newName })
+}).then(r => r.json());
+api.deleteHighlight = (name, id) => fetch(`/api/stories/${encodeURIComponent(name)}/highlights/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(r => r.json());
+
+ // Publish button state checker (global)
 // Enables the Publish button only when:
 //  - the user is authenticated (heuristic: logout button visible)
 //  - a story is open
@@ -231,19 +251,38 @@ if (globalFileInput) {
           console.warn('autosave after image insert failed', err);
         }
       } else if (ctx.mode === 'entity') {
-        // append image markdown to section (highlights.md)
-        const filename = 'highlights.md';
-        const raw = state.storyData && state.storyData.highlights ? state.storyData.highlights : '';
-        const sections = parseEntitySections(raw);
-        const entry = sections[ctx.name] || { title: ctx.name, desc: '' };
-        entry.desc = (entry.desc ? entry.desc + '\n\n' : '') + `![${file.name}](${url})`;
-        sections[ctx.name] = entry;
-        const newContent = Object.values(sections).map(s => composeSection(s.title, s.desc)).join('\n\n');
-        const saveRes = await api.saveFile(state.currentStory, filename, newContent);
-        if (!saveRes || !saveRes.ok) return alert(saveRes && saveRes.error ? saveRes.error : 'Save failed');
-        const updated = await api.getStory(state.currentStory);
-        if (updated && updated.ok) state.storyData = updated;
-        renderPreview();
+        // append image markdown to the per-highlight file (create if missing)
+        try {
+          const map = state.highlightsMap || {};
+          let entry = map[ctx.name];
+          let content = '';
+
+          if (entry && entry.id) {
+            const got = await api.getHighlight(state.currentStory, entry.id).catch(() => null);
+            content = (got && got.ok) ? (got.content || '') : (entry.desc || '');
+          } else {
+            // create a minimal section if missing
+            content = `## ${ctx.name}\n\n`;
+          }
+
+          content = content + (content.trim() ? '\n\n' : '') + `![${file.name}](${url})`;
+
+          if (entry && entry.id) {
+            const saveRes = await api.saveHighlight(state.currentStory, entry.id, content);
+            if (!saveRes || !saveRes.ok) return alert(saveRes && saveRes.error ? saveRes.error : 'Save failed');
+          } else {
+            const cr = await api.createHighlight(state.currentStory, ctx.name, content);
+            if (!cr || !cr.ok) return alert(cr && cr.error ? cr.error : 'Create failed');
+          }
+
+          const updated = await api.getStory(state.currentStory);
+          if (updated && updated.ok) state.storyData = updated;
+          await refreshEntityLists();
+          renderPreview();
+        } catch (err) {
+          console.error('upload->entity save failed', err);
+          alert('Save failed');
+        }
       }
     } catch (err) {
       console.error('upload handler error', err);
@@ -837,129 +876,34 @@ async function saveMainText() {
 
   
 
-  // saving an entity (highlights.md) — merge edited section into the existing file (preserving other sections)
-  const filename = 'highlights.md';
-  const raw = (state.storyData && state.storyData.highlights) ? state.storyData.highlights : '';
-  const arr = parseEntitySectionsArray(raw);
-
-  // parse the editor content which should be in the form "## Name\n\nDescription..."
-  // IMPORTANT: do not trim the full editor content — preserve trailing newlines and cursor position.
-  const editedRaw = (editor.value || '');
-  const lines = editedRaw.split(/\r?\n/);
-  let editedTitle = state.currentView && state.currentView.name ? state.currentView.name : null;
-  let editedDesc = '';
-
-  if (lines.length > 0 && lines[0].match(/^#{1,6}\s+/)) {
-    // title: trim only the heading text, but keep the description verbatim (no .trim())
-    editedTitle = lines[0].replace(/^#{1,6}\s+/, '').trim();
-    editedDesc = lines.slice(1).join('\n');
-  } else {
-    // no explicit heading — treat entire content as description (preserve whitespace)
-    editedDesc = editedRaw;
-  }
-
-  if (!editedTitle) {
-    console.warn('saveMainText: cannot determine entity title; aborting save');
+  // saving an entity when viewing a single highlight file: persist the editor content
+  // to the per-highlight markdown file via the highlights API.
+  if (state.currentView && state.currentView.type === 'highlight') {
+    const id = state.currentView && state.currentView.id;
+    if (!id) return console.warn('saveMainText: no highlight id');
+    const content = editor.value;
+    const res = await api.saveHighlight(state.currentStory, id, content);
+    if (!res || !res.ok) {
+      console.warn('saveMainText: failed to save highlight', res && res.error);
+      return;
+    }
+    // refresh highlights list and story data so counts and tags update
+    try {
+      const updatedList = await api.listHighlights(state.currentStory);
+      if (updatedList && updatedList.ok) {
+        // optionally refresh full story metadata if the backend exposes it
+        const updatedStory = await api.getStory(state.currentStory).catch(() => null);
+        if (updatedStory && updatedStory.ok) state.storyData = updatedStory;
+      }
+    } catch (e) { /* ignore */ }
+    await refreshEntityLists();
+    console.log('Saved highlight', id);
     return;
   }
 
-  // Avoid unnecessary saves that reset content/cursor:
-  // Compare the current in-editor description with the one stored on disk for this entity.
-  // If identical (including trailing newlines) and no rename occurred, skip saving entirely.
-  try {
-    const storedMap = parseEntitySections(raw);
-    const originalName = state.currentView && state.currentView.name ? state.currentView.name : null;
-
-    // If the title was not changed and the stored description matches the edited one, skip save.
-    if (originalName && editedTitle === originalName) {
-      const storedEntry = storedMap[originalName];
-      const storedDesc = storedEntry ? storedEntry.desc : '';
-      if (storedDesc === editedDesc) {
-        console.debug('[debug] saveMainText: no changes detected for', editedTitle, '- skipping save');
-        return;
-      }
-    }
-
-    // If no original name available, fall back to checking by editedTitle.
-    // This is a conservative no-op check: only skip if an existing section with the
-    // same title already has an identical description.
-    if (!originalName && editedTitle) {
-      const storedEntry2 = storedMap[editedTitle];
-      const storedDesc2 = storedEntry2 ? storedEntry2.desc : '';
-      if (storedDesc2 === editedDesc) {
-        console.debug('[debug] saveMainText: no changes detected for', editedTitle, '- skipping save');
-        return;
-      }
-    }
-  } catch (e) {
-    console.warn('saveMainText: compare failed, proceeding to save', e);
-  }
-
-  // find index by original name (supports renames), otherwise by title, otherwise append
-  // We'll compute both indices and handle rename/collision deterministically.
-  let idx = -1;
-  if (state.currentView && state.currentView.name) {
-    idx = arr.findIndex(s => s.title === state.currentView.name);
-  }
-  if (idx === -1) {
-    idx = arr.findIndex(s => s.title === editedTitle);
-  }
-  if (idx === -1) {
-    // append new section
-    arr.push({ title: editedTitle, desc: editedDesc });
-  } else {
-    // replace existing section
-    arr[idx] = { title: editedTitle, desc: editedDesc };
-  }
-
-  const originalName = state.currentView && state.currentView.name ? state.currentView.name : null;
-  const idxOriginal = originalName ? arr.findIndex(s => s.title === originalName) : -1;
-  const idxEdited = arr.findIndex(s => s.title === editedTitle);
-
-  if (idxOriginal !== -1) {
-    if (idxEdited !== -1 && idxEdited !== idxOriginal) {
-      // Rename collided with an existing section. Keep the edited one and remove the original.
-      // Overwrite the existing target with edited content, then remove original.
-      arr[idxEdited] = { title: editedTitle, desc: editedDesc };
-      // If original comes after edited in array and indices shifted, find and remove by title to be safe
-      const remIdx = arr.findIndex(s => s.title === originalName);
-      if (remIdx !== -1) arr.splice(remIdx, 1);
-    } else {
-      // No collision: update original entry (rename or update description)
-      arr[idxOriginal] = { title: editedTitle, desc: editedDesc };
-    }
-  } else if (idxEdited !== -1) {
-    // Original not found but an entry with editedTitle exists — update it
-    arr[idxEdited] = { title: editedTitle, desc: editedDesc };
-  } else {
-    // append new section
-    arr.push({ title: editedTitle, desc: editedDesc });
-  }
-
-  // ensure unique titles (dedupe any accidental duplicates, keeping the first occurrence)
-  const seen = new Set();
-  const merged = [];
-  for (const s of arr) {
-    if (seen.has(s.title)) continue;
-    seen.add(s.title);
-    merged.push(s);
-  }
-
-  const newContent = merged.map(s => composeSection(s.title, s.desc)).join('\n\n');
-  const res = await api.saveFile(state.currentStory, filename, newContent);
-  if (!res || !res.ok) {
-    console.warn('saveMainText: failed to save', filename, res && res.error);
-    return;
-  }
-
-  // refresh story data but do NOT overwrite the editor value or reset the cursor.
-  // Preserve state.currentView if possible; update storyData so counts/tooltips refresh.
-  const updated = await api.getStory(state.currentStory);
-  if (updated && updated.ok) {
-    state.storyData = updated;
-  }
-  refreshEntityLists();
-  console.log('Saved', filename, 'without disturbing the editor for', editedTitle);
+  // For other view types, fall back to existing highlights.md handling (if any)
+  // — but by default the app now uses per-highlight files and the above branch will be used.
+  console.debug('[debug] saveMainText: no per-highlight save performed (view=', state.currentView, ')');
 }
 
 function scheduleAutoSave(delay = 500) {
@@ -1009,10 +953,41 @@ document.addEventListener('keydown', (e) => {
        console.warn('refreshEntityLists: failed to list tiles', e);
      }
    }
-   const hls = parseEntitySections(state.storyData && state.storyData.highlights ? state.storyData.highlights : '');
-   const text = mainText || '';
+  // Build highlights map by querying per-highlight API. Fall back to parsing highlights.md if API is unavailable.
+  const hls = {};
+  const text = mainText || '';
+  try {
+    if (state.currentStory) {
+      const listRes = await api.listHighlights(state.currentStory).catch(() => null);
+      if (listRes && listRes.ok && Array.isArray(listRes.highlights)) {
+        // fetch each highlight content in parallel (small projects expected)
+        const details = await Promise.all(listRes.highlights.map(async (h) => {
+          try {
+            const got = await api.getHighlight(state.currentStory, h.id).catch(() => null);
+            if (got && got.ok) {
+              return { id: h.id, title: got.title || h.title || h.id, content: got.content || '' };
+            }
+          } catch (e) {}
+          // fallback to title only if getHighlight fails
+          return { id: h.id, title: h.title || h.id, content: '' };
+        }));
+        for (const d of details) {
+          hls[d.title] = { id: d.id, title: d.title, desc: (d.content || '').replace(/^\s*#{1,6}\s+.*$/m, '').trim() };
+        }
+      } else {
+        // no highlights available from API; leave hls empty but log for debugging
+        console.warn('refreshEntityLists: no highlights returned from API', listRes);
+      }
+    }
+  } catch (e) {
+    // If per-highlight APIs fail, prefer empty map rather than falling back to highlights.md
+    console.warn('refreshEntityLists: failed to load per-highlight files via API', e);
+  }
 
-  const hlArr = Object.keys(hls).map(n => ({ name: n, count: countOccurrences(text, n) }));
+  // Persist a runtime cache of highlights loaded from per-highlight files so other renderers use them.
+  state.highlightsMap = hls || {};
+  // Build highlight array with occurrence counts and id references
+  const hlArr = Object.keys(hls).map(n => ({ name: n, id: hls[n] && hls[n].id ? hls[n].id : null, count: countOccurrences(text, n) }));
 
   // extract tags from a block of markdown/text — returns unique tags without the leading '#'
   function extractTagsFromText(t) {
@@ -1107,42 +1082,80 @@ document.addEventListener('keydown', (e) => {
       li.appendChild(nameSpan);
       li.appendChild(countSpan);
 
-      // If the highlight has zero occurrences, offer a Delete button to remove it.
-      // Do not show Delete when count > 0.
-      if (item.count === 0) {
-        const delHighlightBtn = document.createElement('button');
-        delHighlightBtn.textContent = 'Delete';
-        delHighlightBtn.style.marginLeft = '8px';
-        delHighlightBtn.addEventListener('click', async (ev) => {
-          ev.stopPropagation();
-          if (!confirm(`Delete highlight "${item.name}"? This will remove it from highlights.md`)) return;
-          try {
+      // Actions: Rename + Delete (use per-highlight APIs when available)
+      const actionsDiv = document.createElement('div');
+      actionsDiv.style.display = 'inline-flex';
+      actionsDiv.style.gap = '6px';
+      actionsDiv.style.marginLeft = '8px';
+      actionsDiv.style.alignItems = 'center';
+
+      const renameBtn = document.createElement('button');
+      renameBtn.textContent = 'Rename';
+      renameBtn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        if (!state.currentStory) return alert('Open a story first');
+        const newTitle = prompt('New highlight title', item.name || '');
+        if (newTitle === null) return;
+        try {
+          // if we have an id, use API rename; otherwise emulate by creating new and deleting legacy section
+          if (item.id) {
+            const rr = await api.renameHighlight(state.currentStory, item.id, newTitle);
+            if (!rr || !rr.ok) return alert(rr && rr.error ? rr.error : 'Rename failed');
+            // if currently open, update editor to the renamed file
+            if (state.currentView && state.currentView.type === 'highlight' && state.currentView.id === item.id) {
+              state.currentView = { type: 'highlight', id: rr.id };
+              const got = await api.getHighlight(state.currentStory, rr.id);
+              if (got && got.ok) editor.value = got.content || '';
+              try { currentStoryTitle.textContent = `${state.currentStory} - ${rr.title}`; } catch (e) {}
+            }
+          } else {
+            alert('Rename not supported for legacy highlights');
+          }
+          await refreshEntityLists();
+        } catch (err) {
+          console.error('rename highlight failed', err);
+          alert('Rename failed');
+        }
+      });
+      actionsDiv.appendChild(renameBtn);
+
+      const delBtn = document.createElement('button');
+      delBtn.textContent = 'Delete';
+      delBtn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        if (!confirm(`Delete highlight "${item.name}"? This cannot be undone.`)) return;
+        try {
+          if (item.id) {
+            const rr = await api.deleteHighlight(state.currentStory, item.id);
+            if (!rr || !rr.ok) return alert(rr && rr.error ? rr.error : 'Delete failed');
+          } else {
+            // fallback: remove from legacy highlights.md
             const filename = 'highlights.md';
             const raw = (state.storyData && state.storyData.highlights) ? state.storyData.highlights : '';
-            const arr = parseEntitySectionsArray(raw);
-            const idx = arr.findIndex(s => s.title === item.name);
-            if (idx === -1) {
-              // nothing to do
-              await refreshEntityLists();
-              return;
+            const arrLegacy = parseEntitySectionsArray(raw);
+            const idx = arrLegacy.findIndex(s => s.title === item.name);
+            if (idx !== -1) {
+              arrLegacy.splice(idx, 1);
+              const newContent = arrLegacy.map(s => composeSection(s.title, s.desc)).join('\n\n');
+              const r = await api.saveFile(state.currentStory, filename, newContent);
+              if (!r || !r.ok) return alert(r && r.error ? r.error : 'Delete failed');
             }
-            arr.splice(idx, 1);
-            const newContent = arr.map(s => composeSection(s.title, s.desc)).join('\n\n');
-            const res = await api.saveFile(state.currentStory, filename, newContent);
-            if (!res || !res.ok) {
-              alert(res && res.error ? res.error : 'Delete failed');
-              return;
-            }
-            const updated = await api.getStory(state.currentStory);
-            if (updated && updated.ok) state.storyData = updated;
-            await refreshEntityLists();
-          } catch (err) {
-            console.error('delete highlight failed', err);
-            alert('Delete failed');
           }
-        });
-        li.appendChild(delHighlightBtn);
-      }
+          // if currently editing this highlight, close editor and clear preview
+          if (state.currentView && state.currentView.type === 'highlight' && state.currentView.id === item.id) {
+            state.currentView = { type: null, name: null };
+            editor.value = '';
+            try { currentStoryTitle.textContent = state.currentStory || 'No story opened'; } catch (e) {}
+            renderPreview();
+          }
+          await refreshEntityLists();
+        } catch (err) {
+          console.error('delete highlight failed', err);
+          alert('Delete failed');
+        }
+      });
+      actionsDiv.appendChild(delBtn);
+      li.appendChild(actionsDiv);
 
       // find tags inside the highlight description (if available in hls map)
       const desc = (hls && hls[item.name] && typeof hls[item.name].desc === 'string') ? hls[item.name].desc : '';
@@ -1174,8 +1187,8 @@ document.addEventListener('keydown', (e) => {
         li.appendChild(tspan);
       }
 
-      // click behavior: open the entity in the main editor
-      li.addEventListener('click', () => openEntityInEditor(type, item.name));
+      // click behavior: open the entity in the main editor (pass id + name)
+      li.addEventListener('click', () => openEntityInEditor(type, item.id, item.name));
       container.appendChild(li);
     }
 
@@ -1640,8 +1653,8 @@ function renderPreview() {
     }
     console.log('[debug] preview rendered, html length=', (html || '').length, 'childNodes=', preview.childNodes.length, 'data-render-debug=', preview.getAttribute('data-render-debug'));
 
-    // derive entities from state if available, otherwise empty lists
-    const entityMap = parseEntitySections((state.storyData && state.storyData.highlights) || '');
+    // derive entities from per-highlight cache if available (state.highlightsMap)
+    const entityMap = state.highlightsMap || {};
     const hls = Object.keys(entityMap);
 
     // build combined list (highlights) and sort by length desc to prefer longest match
@@ -1695,6 +1708,8 @@ function renderPreview() {
         const ent = entityMap && entityMap[mt.name] ? entityMap[mt.name] : null;
         const entTags = ent ? extractTagsFromText(ent.desc) : [];
         if (entTags && entTags.length > 0) {
+          // ensure any previous no-tags marker is removed so CSS for tagged highlights applies
+          a.classList.remove('no-tags');
           const st = tagStyleFor(entTags[0]);
           // apply pill background and text color; add subtle padding & radius to mimic the pill
           if (st && st.background) a.style.background = st.background;
@@ -1703,10 +1718,13 @@ function renderPreview() {
           a.style.borderRadius = '6px';
           a.style.textDecoration = 'underline';
         } else {
-          // no tag -> plain black text, no background
-          a.style.background = 'transparent';
-          a.style.color = '#000';
-          a.style.textDecoration = 'underline';
+          // no tag -> mark as no-tags so CSS will render fluorescent yellow (clear inline styles first)
+          a.classList.add('no-tags');
+          a.style.background = '';
+          a.style.color = '';
+          a.style.padding = '';
+          a.style.borderRadius = '';
+          a.style.textDecoration = '';
         }
       } catch (e) {
         // if anything goes wrong, fallback to default link color (do nothing)
@@ -1756,9 +1774,15 @@ function onEntityHover(ev) {
   const name = a.dataset.entityName;
   const type = a.dataset.entityType;
   if (!state.storyData) return;
-  const raw = state.storyData[type] || '';
-  const map = parseEntitySections(raw);
-  const entry = map[name] || { title: name, desc: '' };
+  const map = state.highlightsMap || {};
+  let entry = map[name];
+  if (!entry) {
+    // try case-insensitive lookup
+    for (const k in map) {
+      if (k && k.toLowerCase() === String(name || '').toLowerCase()) { entry = map[k]; break; }
+    }
+  }
+  if (!entry) entry = { title: name, desc: '' };
   const images = state.storyData.images && state.storyData.images[type] ? state.storyData.images[type] : [];
 
   // choose image to show in tooltip:
@@ -1837,47 +1861,77 @@ function openEntityEditor(type, name) {
 
 closeEntityBtn.addEventListener('click', () => entityModal.classList.add('hidden'));
 
-function openEntityInEditor(type, name) {
+function openEntityInEditor(type, id, title) {
   if (!state.currentStory) return alert('Open a story first');
-  state.currentView = { type, name };
-  const raw = state.storyData && state.storyData.highlights ? state.storyData.highlights : '';
-  const map = parseEntitySections(raw);
-  const entry = map[name] || { title: name, desc: '' };
-  // load the entity as markdown into the editor so it behaves like the main text
-  editor.value = composeSection(entry.title, entry.desc);
-  // enable editor because user is editing a highlight
-  setEditorEnabled(true);
-  try { editor.focus(); } catch (e) {}
-  renderPreview();
+  (async () => {
+    try {
+      if (!id) {
+        // fallback to legacy behavior if id missing: open by name from highlights.md
+        const raw = state.storyData && state.storyData.highlights ? state.storyData.highlights : '';
+        const map = parseEntitySections(raw);
+        const entry = map[title] || { title: title, desc: '' };
+        editor.value = composeSection(entry.title, entry.desc);
+        state.currentView = { type: 'highlight', id: null };
+        setEditorEnabled(true);
+        renderPreview();
+        return;
+      }
+      const got = await api.getHighlight(state.currentStory, id);
+      if (!got || !got.ok) {
+        alert(got && got.error ? got.error : 'Failed to load highlight');
+        return;
+      }
+      state.currentView = { type: 'highlight', id: id };
+      // load the file content (keeps heading if present)
+      editor.value = got.content || composeSection(got.title || title, '');
+      // update header to show "story - highlight title"
+      try { currentStoryTitle.textContent = `${state.currentStory} - ${got.title || title}`; } catch (e) {}
+      setEditorEnabled(true);
+      editor.focus();
+      renderPreview();
+    } catch (err) {
+      console.error('openEntityInEditor failed', err);
+      alert('Failed to open highlight');
+    }
+  })();
 }
 
 saveEntityBtn.addEventListener('click', async () => {
   if (!currentEditing || !currentEditing.name) return;
   const { type, name } = currentEditing;
-  const filename = 'highlights.md';
-  const raw = state.storyData && state.storyData.highlights ? state.storyData.highlights : '';
-  const map = parseEntitySections(raw);
-  map[name] = { title: name, desc: (entityContent.value || '') };
+  let content = (entityContent.value || '');
 
-  // if an image was selected, upload it to the story images and then proceed
+  // if an image was selected, upload it first and append to content
   const file = entityImageInput.files[0];
   if (file) {
     const up = await api.uploadImage(state.currentStory, 'highlights', file);
     if (!up || !up.ok) return alert(up && up.error ? up.error : 'Image upload failed');
-    // refresh state to include the new image
-    const updated = await api.getStory(state.currentStory);
-    if (updated && updated.ok) state.storyData = updated;
+    const url = up.url;
+    if (url) {
+      content = (content ? content + '\n\n' : content) + `![${file.name}](${url})`;
+    }
   }
 
-  const sections = Object.values(map).map(e => composeSection(e.title, e.desc));
-  const newContent = sections.join('\n\n');
-  const res = await api.saveFile(state.currentStory, filename, newContent);
-  if (!res || !res.ok) return alert(res && res.error ? res.error : 'Save failed');
-  const updated = await api.getStory(state.currentStory);
-  if (updated && updated.ok) {
-    state.storyData = updated;
+  // find existing entry id (if any) from runtime cache
+  const map = state.highlightsMap || {};
+  const entry = map[name];
+
+  try {
+    if (entry && entry.id) {
+      const res = await api.saveHighlight(state.currentStory, entry.id, content);
+      if (!res || !res.ok) throw new Error(res && res.error ? res.error : 'Save failed');
+    } else {
+      const res = await api.createHighlight(state.currentStory, name, content);
+      if (!res || !res.ok) throw new Error(res && res.error ? res.error : 'Create failed');
+    }
+
+    // refresh story metadata and highlights list
+    const updatedStory = await api.getStory(state.currentStory).catch(() => null);
+    if (updatedStory && updatedStory.ok) state.storyData = updatedStory;
     entityModal.classList.add('hidden');
-    refreshEntityLists();
+    await refreshEntityLists();
+  } catch (err) {
+    alert(err && err.message ? err.message : 'Save failed');
   }
 });
 
@@ -1960,31 +2014,20 @@ function openNewEntityModal(type, name) {
 }
 
 async function createEntityAndOpen(type, name, openAfter = true) {
-  // create the entity entry (if missing) in the highlights.md file, refresh state, then optionally open it in editor
   if (!state.currentStory) throw new Error('Open a story first');
-  const filename = 'highlights.md';
-  const raw = state.storyData && state.storyData.highlights ? state.storyData.highlights : '';
-  const map = parseEntitySections(raw);
-
-  // if already exists, just open it (or refresh lists)
-  const arr = parseEntitySectionsArray(raw);
-  const existingIdx = arr.findIndex(s => s.title === name);
-  if (existingIdx === -1) {
-    arr.push({ title: name, desc: '' });
-    const newContent = arr.map(s => composeSection(s.title, s.desc)).join('\n\n');
-    const res = await api.saveFile(state.currentStory, filename, newContent);
-    if (!res || !res.ok) throw new Error(res && res.error ? res.error : 'Save failed');
-    const updated = await api.getStory(state.currentStory);
-    if (updated && updated.ok) state.storyData = updated;
+  // create a per-highlight markdown file via API
+  try {
+    const res = await api.createHighlight(state.currentStory, name, `## ${name}\n\n`);
+    if (!res || !res.ok) throw new Error(res && res.error ? res.error : 'Create failed');
+    // refresh highlights list
     await refreshEntityLists();
-  } else {
-    // ensure lists are up to date
-    await refreshEntityLists();
-  }
-
-  // optionally open the new entity in the main editor
-  if (openAfter) {
-    openEntityInEditor('highlights', name);
+    if (openAfter) {
+      // open newly created highlight
+      openEntityInEditor('highlights', res.id, res.title || name);
+    }
+  } catch (err) {
+    console.error('createEntityAndOpen failed', err);
+    throw err;
   }
 }
 

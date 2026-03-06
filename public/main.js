@@ -1130,22 +1130,80 @@ document.addEventListener('keydown', (e) => {
         if (!state.currentStory) return alert('Open a story first');
         const newTitle = prompt('New highlight title', item.name || '');
         if (newTitle === null) return;
+
         try {
-          // if we have an id, use API rename; otherwise emulate by creating new and deleting legacy section
-          if (item.id) {
-            const rr = await api.renameHighlight(state.currentStory, item.id, newTitle);
-            if (!rr || !rr.ok) return alert(rr && rr.error ? rr.error : 'Rename failed');
-            // if currently open, update editor to the renamed file
-            if (state.currentView && state.currentView.type === 'highlight' && state.currentView.id === item.id) {
-              state.currentView = { type: 'highlight', id: rr.id };
-              const got = await api.getHighlight(state.currentStory, rr.id);
-              if (got && got.ok) editor.value = got.content || '';
-              try { currentStoryTitle.textContent = `${state.currentStory} - ${rr.title}`; } catch (e) {}
-            }
-          } else {
+          if (!item.id) {
             alert('Rename not supported for legacy highlights');
+            return;
           }
+
+          // Preview: ask the server where replacements would occur (dry-run)
+          const previewUrl = `/api/stories/${encodeURIComponent(state.currentStory)}/highlights/${encodeURIComponent(item.id)}/rename-preview?newName=${encodeURIComponent(newTitle)}`;
+          let preview = null;
+          try {
+            const pRes = await fetch(previewUrl);
+            preview = await pRes.json().catch(() => null);
+          } catch (e) {
+            preview = null;
+          }
+
+          // Build a user-friendly preview message
+          let msg = `Rename "${item.name}" → "${newTitle}"\n\nWhole-word, case-sensitive matches will be replaced across Tiles and Highlights.\nThis operation is NOT reversible.\n\n`;
+          if (!preview || !preview.ok) {
+            msg += 'Preview unavailable (server error). Proceed with rename?';
+          } else {
+            msg += `Total matches: ${preview.totalMatches || 0}\nFiles with matches: ${Array.isArray(preview.files) ? preview.files.length : 0}\n\nSample occurrences:\n`;
+            // show up to 5 snippets across files
+            let shown = 0;
+            for (const f of (preview.files || [])) {
+              for (const m of (f.matches || [])) {
+                msg += `${f.path}:${m.line} — ${m.snippet}\n`;
+                shown++;
+                if (shown >= 5) break;
+              }
+              if (shown >= 5) break;
+            }
+            if (shown === 0) msg += '[no sample matches]\n';
+            msg += '\nProceed with the rename and replace all matches?';
+          }
+
+          const ok = confirm(msg);
+          if (!ok) return;
+
+          // Perform rename + propagation
+          const renameUrl = `/api/stories/${encodeURIComponent(state.currentStory)}/highlights/${encodeURIComponent(item.id)}/rename`;
+          const body = { newName: newTitle, propagate: true };
+          const rRes = await fetch(renameUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          });
+          const rBody = await rRes.json().catch(() => null);
+          if (!rBody || !rBody.ok) {
+            return alert(rBody && rBody.error ? rBody.error : 'Rename failed');
+          }
+
+          // If the user was viewing this highlight, refresh the open editor content and header
+          if (state.currentView && state.currentView.type === 'highlight' && state.currentView.id === item.id) {
+            try {
+              const got = await api.getHighlight(state.currentStory, item.id);
+              if (got && got.ok) {
+                editor.value = got.content || '';
+                currentStoryTitle.textContent = `${state.currentStory} - ${got.title || newTitle}`;
+              }
+            } catch (e) { /* ignore */ }
+          }
+
+          // Refresh lists to reflect updated metadata and counts
           await refreshEntityLists();
+
+          // Show summary of what changed
+          const sum = (rBody.summary && typeof rBody.summary === 'object') ? rBody.summary : null;
+          if (sum) {
+            alert(`Rename completed. Replacements: ${sum.totalReplacements}. Files changed: ${sum.filesChanged ? sum.filesChanged.length : 0}.`);
+          } else {
+            alert('Rename completed.');
+          }
         } catch (err) {
           console.error('rename highlight failed', err);
           alert('Rename failed');

@@ -501,22 +501,25 @@ app.get('/api/stories/:name/highlights', requireAuth, (req, res) => {
   try {
     const { userId, base } = resolveBaseFlexible(req, name);
     if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+
     const dir = path.join(base, 'highlights');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    const files = fs.readdirSync(dir, { withFileTypes: true }).filter(d => d.isFile() && d.name.endsWith('.md')).map(d => d.name);
-    const list = files.map(fn => {
-      const id = path.basename(fn, '.md');
-      const fp = path.join(dir, fn);
-      let title = id;
-      try {
-        const txt = fs.readFileSync(fp, 'utf8') || '';
-        const m = txt.match(/^\s*#{1,6}\s+(.*)$/m);
-        if (m && m[1]) title = m[1].trim();
-      } catch (e) { /* ignore */ }
+
+    const metaPath = path.join(dir, 'highlights.json');
+    // If highlights.json missing, return empty list per spec (no backwards compatibility)
+    if (!fs.existsSync(metaPath)) return res.json({ ok: true, highlights: [] });
+
+    let meta = [];
+    try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8') || '[]'); } catch (e) { meta = []; }
+
+    // enrich with mtime if file present
+    const list = meta.map(item => {
+      const fp = path.join(dir, item.id + '.md');
       let mtime = 0;
-      try { mtime = fs.statSync(fp).mtimeMs || 0; } catch (e) {}
-      return { id, title, mtime };
+      try { mtime = fs.existsSync(fp) ? fs.statSync(fp).mtimeMs || 0 : 0; } catch (e) { mtime = 0; }
+      return { id: item.id, title: item.title, mtime };
     });
+
     res.json({ ok: true, highlights: list });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
@@ -529,14 +532,23 @@ app.get('/api/stories/:name/highlights/:id', requireAuth, (req, res) => {
   try {
     const { userId, base } = resolveBaseFlexible(req, name);
     if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+
     const dir = path.join(base, 'highlights');
+    const metaPath = path.join(dir, 'highlights.json');
+    if (!fs.existsSync(metaPath)) return res.status(404).json({ ok: false, error: 'highlights metadata not found' });
+
+    let meta = [];
+    try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8') || '[]'); } catch (e) { meta = []; }
+    const entry = meta.find(m => m.id === id);
+    if (!entry) return res.status(404).json({ ok: false, error: 'highlight not found' });
+
     const filename = path.join(dir, id + '.md');
-    if (!fs.existsSync(filename)) return res.status(404).json({ ok: false, error: 'highlight not found' });
-    const content = fs.readFileSync(filename, 'utf8');
-    // derive title from first heading if present
-    const m = content.match(/^\s*#{1,6}\s+(.*)$/m);
-    const title = (m && m[1]) ? m[1].trim() : id;
-    res.json({ ok: true, id, title, content });
+    let content = '';
+    if (fs.existsSync(filename)) {
+      try { content = fs.readFileSync(filename, 'utf8'); } catch (e) { content = ''; }
+    }
+
+    res.json({ ok: true, id, title: entry.title, content });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -549,25 +561,32 @@ app.post('/api/stories/:name/highlights', requireAuth, (req, res) => {
   try {
     const { userId, base } = resolveBaseFlexible(req, name);
     if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+
     const dir = path.join(base, 'highlights');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    const metaPath = path.join(dir, 'highlights.json');
+    let meta = [];
+    try { meta = fs.existsSync(metaPath) ? JSON.parse(fs.readFileSync(metaPath, 'utf8') || '[]') : []; } catch (e) { meta = []; }
+
     let id = safeName(title) || String(Date.now());
-    // ensure uniqueness
+    // ensure uniqueness within meta
     let candidate = id;
     let suffix = 1;
-    while (fs.existsSync(path.join(dir, candidate + '.md'))) {
+    while (meta.find(m => m.id === candidate)) {
       candidate = `${id}-${suffix++}`;
     }
     id = candidate;
-    // ensure content has a title heading
-    let out = (typeof content === 'string') ? content : '';
-    if (!/^\s*#{1,6}\s+/.test(out)) {
-      out = `## ${title}\n\n` + out;
-    } else {
-      // replace first heading text with title to keep canonical identity
-      out = out.replace(/^\s*#{1,6}\s+.*$/m, `## ${title}`);
-    }
+
+    // write file (empty by default if no content provided)
+    const out = (typeof content === 'string') ? content : '';
     fs.writeFileSync(path.join(dir, id + '.md'), out, 'utf8');
+
+    // append to highlights.json
+    const now = Date.now();
+    meta.push({ id, title, mtime: now });
+    try { fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf8'); } catch (e) {}
+
     res.json({ ok: true, id, title });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
@@ -582,44 +601,156 @@ app.post('/api/stories/:name/highlights/:id/save', requireAuth, (req, res) => {
   try {
     const { userId, base } = resolveBaseFlexible(req, name);
     if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+
     const dir = path.join(base, 'highlights');
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const metaPath = path.join(dir, 'highlights.json');
+    if (!fs.existsSync(metaPath)) return res.status(404).json({ ok: false, error: 'highlights metadata not found' });
+
+    let meta = [];
+    try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8') || '[]'); } catch (e) { meta = []; }
+    const entry = meta.find(m => m.id === id);
+    if (!entry) return res.status(404).json({ ok: false, error: 'highlight not found' });
+
     const filename = path.join(dir, id + '.md');
     fs.writeFileSync(filename, content, 'utf8');
+
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
+/**
+ * Rename highlight title and optional propagation (search & replace).
+ *
+ * New endpoints:
+ *  - GET  /api/stories/:name/highlights/:id/rename-preview?newName=... 
+ *      -> returns a dry-run preview of matches in tiles/*.md and highlights/*.md
+ *  - POST /api/stories/:name/highlights/:id/rename
+ *      body: { newName, propagate: true|false }
+ *      -> updates highlights.json title and, if propagate, replaces whole-word case-sensitive matches
+ *         in tiles/*.md and highlights/*.md (NOT reversible).
+ */
+app.get('/api/stories/:name/highlights/:id/rename-preview', requireAuth, (req, res) => {
+  const name = req.params.name;
+  const id = req.params.id;
+  const newName = req.query.newName;
+  if (!newName) return res.status(400).json({ ok: false, error: 'newName query param required' });
+
+  try {
+    const { userId, base } = resolveBaseFlexible(req, name);
+    if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+
+    const dir = path.join(base, 'highlights');
+    const metaPath = path.join(dir, 'highlights.json');
+    if (!fs.existsSync(metaPath)) return res.status(404).json({ ok: false, error: 'highlights metadata not found' });
+
+    let meta = [];
+    try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8') || '[]'); } catch (e) { meta = []; }
+    const entry = meta.find(m => m.id === id);
+    if (!entry) return res.status(404).json({ ok: false, error: 'highlight not found' });
+
+    const oldName = entry.title || id;
+    // build whole-word, case-sensitive regex using escaped oldName
+    const escapeForRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`\\b${escapeForRegex(oldName)}\\b`, 'g');
+
+    const scanDirs = ['tiles', 'highlights'];
+    const filesResult = [];
+    let totalMatches = 0;
+
+    for (const sub of scanDirs) {
+      const p = path.join(base, sub);
+      if (!fs.existsSync(p)) continue;
+      const ents = fs.readdirSync(p, { withFileTypes: true }).filter(d => d.isFile() && d.name.endsWith('.md')).map(d => d.name);
+      for (const fn of ents) {
+        const fp = path.join(p, fn);
+        let txt = '';
+        try { txt = fs.readFileSync(fp, 'utf8') || ''; } catch (e) { continue; }
+        const lines = String(txt).split(/\r?\n/);
+        const matches = [];
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          const m = line.match(re);
+          if (m && m.length) {
+            totalMatches += m.length;
+            // capture a snippet with context
+            const snippet = line.trim().slice(0, 240);
+            matches.push({ line: i + 1, snippet, count: m.length });
+          }
+        }
+        if (matches.length) {
+          filesResult.push({ path: path.relative(base, fp), matches });
+        }
+      }
+    }
+
+    return res.json({ ok: true, totalMatches, files: filesResult });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.post('/api/stories/:name/highlights/:id/rename', requireAuth, (req, res) => {
   const name = req.params.name;
   const id = req.params.id;
-  const { newName } = req.body || {};
+  const { newName, propagate } = req.body || {};
   if (!newName) return res.status(400).json({ ok: false, error: 'newName is required' });
   try {
     const { userId, base } = resolveBaseFlexible(req, name);
     if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+
     const dir = path.join(base, 'highlights');
-    const from = path.join(dir, id + '.md');
-    if (!fs.existsSync(from)) return res.status(404).json({ ok: false, error: 'highlight not found' });
-    const newId = safeName(newName) || String(Date.now());
-    let candidate = newId;
-    let suffix = 1;
-    while (fs.existsSync(path.join(dir, candidate + '.md'))) {
-      candidate = `${newId}-${suffix++}`;
+    const metaPath = path.join(dir, 'highlights.json');
+    if (!fs.existsSync(metaPath)) return res.status(404).json({ ok: false, error: 'highlights metadata not found' });
+
+    let meta = [];
+    try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8') || '[]'); } catch (e) { meta = []; }
+    const entry = meta.find(m => m.id === id);
+    if (!entry) return res.status(404).json({ ok: false, error: 'highlight not found' });
+
+    const oldName = entry.title || id;
+
+    // Update metadata title first (authoritative)
+    entry.title = newName;
+    entry.mtime = Date.now();
+    try { fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf8'); } catch (e) {}
+
+    // If propagate requested, perform whole-word, case-sensitive replacements in tiles/*.md and highlights/*.md
+    const resultSummary = { totalReplacements: 0, filesChanged: [] };
+    if (propagate) {
+      const escapeForRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp(`\\b${escapeForRegex(oldName)}\\b`, 'g'); // case-sensitive, whole-word
+      const scanDirs = ['tiles', 'highlights'];
+
+      for (const sub of scanDirs) {
+        const p = path.join(base, sub);
+        if (!fs.existsSync(p)) continue;
+        const ents = fs.readdirSync(p, { withFileTypes: true }).filter(d => d.isFile() && d.name.endsWith('.md')).map(d => d.name);
+        for (const fn of ents) {
+          const fp = path.join(p, fn);
+          let txt = '';
+          try { txt = fs.readFileSync(fp, 'utf8') || ''; } catch (e) { continue; }
+          const matches = txt.match(re);
+          if (!matches || matches.length === 0) continue;
+          const replacements = matches.length;
+          const newTxt = txt.replace(re, newName);
+          // atomic write
+          try {
+            const tmp = fp + '.tmp';
+            fs.writeFileSync(tmp, newTxt, 'utf8');
+            fs.renameSync(tmp, fp);
+            resultSummary.totalReplacements += replacements;
+            resultSummary.filesChanged.push({ path: path.relative(base, fp), replacements });
+          } catch (e) {
+            // on failure, abort and return error to avoid partial silent corruption
+            return res.status(500).json({ ok: false, error: 'failed to write updated file: ' + fp });
+          }
+        }
+      }
     }
-    const to = path.join(dir, candidate + '.md');
-    // update file content heading if present, otherwise prepend heading
-    let content = fs.readFileSync(from, 'utf8') || '';
-    if (/^\s*#{1,6}\s+/.test(content)) {
-      content = content.replace(/^\s*#{1,6}\s+.*$/m, `## ${newName}`);
-    } else {
-      content = `## ${newName}\n\n` + content;
-    }
-    fs.writeFileSync(from, content, 'utf8');
-    fs.renameSync(from, to);
-    res.json({ ok: true, id: candidate, title: newName });
+
+    return res.json({ ok: true, id, title: newName, propagate: !!propagate, summary: resultSummary });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -631,9 +762,20 @@ app.delete('/api/stories/:name/highlights/:id', requireAuth, (req, res) => {
   try {
     const { userId, base } = resolveBaseFlexible(req, name);
     if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+
     const dir = path.join(base, 'highlights');
+    const metaPath = path.join(dir, 'highlights.json');
+    if (!fs.existsSync(metaPath)) return res.status(404).json({ ok: false, error: 'highlights metadata not found' });
+
+    let meta = [];
+    try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8') || '[]'); } catch (e) { meta = []; }
+    const idx = meta.findIndex(m => m.id === id);
+    if (idx !== -1) meta.splice(idx, 1);
+    try { fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf8'); } catch (e) {}
+
     const filename = path.join(dir, id + '.md');
     if (fs.existsSync(filename)) fs.unlinkSync(filename);
+
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });

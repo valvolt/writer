@@ -599,7 +599,8 @@ function countOccurrences(text, name) {
   // coerce non-strings to safe string values (defensive: avoids .match TypeError)
   if (typeof text !== 'string') text = String(text || '');
   if (!text) return 0;
-  const re = new RegExp(`\\b${escapeRegExp(name)}\\b`, 'gi');
+  // Use whole-word, case-sensitive matching for counts (aligns with UI highlight behavior).
+  const re = new RegExp(`\\b${escapeRegExp(name)}\\b`, 'g');
   const m = text.match(re);
   return m ? m.length : 0;
 }
@@ -1700,15 +1701,16 @@ function renderPreview() {
       const txt = textNode.nodeValue;
       if (!txt || !txt.trim()) return;
 
-      // collect matches across all entity names
-      const matches = [];
-      for (const item of combined) {
-        const re = new RegExp(`\\b${escapeRegExp(item.name)}\\b`, 'gi');
-        let m;
-        while ((m = re.exec(txt)) !== null) {
-          matches.push({ index: m.index, text: m[0], name: item.name, cls: item.cls, length: m[0].length });
-        }
+    // collect matches across all entity names
+    const matches = [];
+    for (const item of combined) {
+      // Use case-sensitive matching (no 'i' flag) and whole-word boundaries.
+      const re = new RegExp(`\\b${escapeRegExp(item.name)}\\b`, 'g');
+      let m;
+      while ((m = re.exec(txt)) !== null) {
+        matches.push({ index: m.index, text: m[0], name: item.name, cls: item.cls, length: m[0].length });
       }
+    }
       if (matches.length === 0) return;
 
       // sort matches by index and filter overlaps (keep earliest, then skip overlaps)

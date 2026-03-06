@@ -60,6 +60,16 @@ aside#sidebar { display: flex; flex-direction: column; }
 #storyList{list-style:none;margin:0;padding:0;overflow-y:auto;overflow-x:hidden;min-height:40px}
 #highlightList, #locationList{list-style:none;margin:0;padding:0;overflow:auto;min-height:40px}
 #storyList li, #highlightList li, #locationList li{padding:6px;border-radius:4px;cursor:pointer}
+
+/* Ensure highlight list items align name, count and actions consistently.
+   Use flex layout so the actions container (set to margin-left:auto in JS)
+   stays right-justified and aligned across all items. */
+#highlightList li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 #storyList li:hover, #highlightList li:hover, #locationList li:hover{background:#f5f7ff}
 
 .story-actions{margin-top:auto;display:flex;flex-direction:column;gap:8px}

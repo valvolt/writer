@@ -1106,6 +1106,21 @@ document.addEventListener('keydown', (e) => {
       const li = document.createElement('li');
 
       // name and count
+      // left column: title row (name + count) and tags stacked below
+      const left = document.createElement('div');
+      left.className = 'hl-left';
+      left.style.display = 'flex';
+      left.style.flexDirection = 'column';
+      left.style.flex = '1';
+      left.style.minWidth = '0';
+
+      const titleRow = document.createElement('div');
+      titleRow.className = 'hl-title-row';
+      titleRow.style.display = 'flex';
+      titleRow.style.alignItems = 'center';
+      titleRow.style.gap = '8px';
+      titleRow.style.minWidth = '0';
+
       const nameSpan = document.createElement('span');
       nameSpan.textContent = item.name;
       nameSpan.style.fontWeight = '500';
@@ -1116,8 +1131,9 @@ document.addEventListener('keydown', (e) => {
       countSpan.textContent = `(${item.count})`;
       countSpan.style.marginRight = '8px';
 
-      li.appendChild(nameSpan);
-      li.appendChild(countSpan);
+      titleRow.appendChild(nameSpan);
+      titleRow.appendChild(countSpan);
+      left.appendChild(titleRow);
 
       // Actions: Rename + Delete (use per-highlight APIs when available)
       const actionsDiv = document.createElement('div');
@@ -1294,8 +1310,6 @@ document.addEventListener('keydown', (e) => {
         }
       });
       actionsDiv.appendChild(delBtn);
-      li.appendChild(actionsDiv);
-
       // find tags inside the highlight description (if available in hls map)
       const desc = (hls && hls[item.name] && typeof hls[item.name].desc === 'string') ? hls[item.name].desc : '';
       const tags = extractTagsFromText(desc);
@@ -1323,8 +1337,15 @@ document.addEventListener('keydown', (e) => {
         });
         // visually mark bubbled tag (less prominent than .selected)
         if (state.bubbleTag === tag) tspan.classList.add('bubbled');
-        li.appendChild(tspan);
+        left.appendChild(tspan);
       }
+
+      // place action buttons at the far right and ensure they stay aligned across items
+      // append the left column (title + tags) first so tags remain stacked under the title,
+      // then append the actions container which will sit to the right.
+      li.appendChild(left);
+      actionsDiv.style.marginLeft = '8px';
+      li.appendChild(actionsDiv);
 
       // click behavior: open the entity in the main editor (pass id + name)
       li.addEventListener('click', () => openEntityInEditor(type, item.id, item.name));

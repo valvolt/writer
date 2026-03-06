@@ -20,6 +20,29 @@ docker compose up --build
 ```
 Open http://localhost:3000/
 
+## Host it
+By default, the server runs in Local Mode (no authentication, single user). To enable user authentication and multi-user management, do as follows:
+
+- create a .env file that you position in the root folder, as follows:
+
+```
+AUTH0_AUTH_REQUIRED=false
+AUTH0_AUTH0LOGOUT=true
+SECRET=<put an arbitrary long string here>
+AUTH0_BASEURL=
+AUTH0_CLIENT_ID=
+AUTH0_ISSUER_BASE_URL=https://
+PORT=3000
+```
+
+- register or login to auth0.com
+  - Create a simple Application for an Express web application
+  - Copy and paste the Client ID to the AUTH0_CLIENT_ID field in .env
+  - Copy and paste the Domain to the AUTH0_ISSUER_BASE_URL field in .env (after https://)
+- set AUTH0_BASEURL to the URL where you are hosting the application (if on your local machine, that's http://localhost:3000)
+
+Start the server with docker compose. The system will parse the .env file and enable user management.
+
 ## Writing your story
 
 Type 'my story' and click Create
@@ -41,6 +64,8 @@ Click on 'my story'. The rendering pane should say 'Chapter one' then 'Chapter t
 Drag and drop tile 'Chapter two' on top of tile 'Chapter one'. See how the rendering pane now says 'Chapter two' then 'Chapter one'.
 
 The tile system is how you can break your story in chunk and reorganize them any way you want.
+
+Note how at the bottom you can see the total number of words and characters you typed. The left number is the total number. The right number relates to the current tile.
 
 ### Highlights
 
@@ -75,15 +100,15 @@ Tags are namely used to manage highlight.
 
 Click the tile 'Chapter one', see how the words Alice, Bob and forrest are now rendered.
 
-In the left menu, click tag 'character'. See how 'forrest' disappeared. Press the x to remove the filter. You can filter by any tag you want.
+In the left menu, click tag 'location'. See how the forrest now appears on top. If you want all characters to be on top, simply click tag 'character'
 
 You can also order highlights by alphabetical order, or by number of times they appear in the story.
 
-With these filters, you can see which highlights are overused or underused.
-
 If you remove all occurrences of a highlight, you can delete it (a delete button will appear)
 
-You can also use tags in the text of the tiles. I don't think that's *really* useful, I admit. The story tags will appear on the top banner.
+If you rename a highlight, it will rename all its occurences in the text. This can be useful if you want to rename a character, for example.
+
+You can also use tags in the text of the tiles, for example to mark a text as 'draft'. The story tags will appear on the top banner.
 
 ### images
 
@@ -95,10 +120,33 @@ You can upload images anywhere, just right-click and select 'Upload image...'. T
 
 Images can illustrate your stories, or help you remember who is who and what is what when it comes to highlights.
 
+## Publishing
+
+Only you can see the stories you are working on. You can click 'Publish' to make your story public. It can then be read by anyone (no need to authenticate). It is not possible to 'unpublish' a story as of today. Please note that when you publish a story, all images will be copied over to the published folder (and thus take space on disk)
 
 ## On the disk
 
 All content is auto-saved with each keystroke.
+
+The structure is as follows:
+```
+story\
+  username\
+    my-story\
+      tiles\
+        tile1.md
+        tile2.md
+        tiles.json
+      highlights\
+        highlight1.md
+        highlight2.md
+        highlights.json
+      images\
+        image1.png
+      published\
+        image1.png
+        my-story.md
+```
 
 You will find folder 'my story' under 'stories'. Browse the files there to retrieve your text in md files and your uploaded images.
 

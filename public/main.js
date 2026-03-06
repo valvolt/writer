@@ -839,6 +839,10 @@ async function openStory(name) {
   currentStoryTitle.textContent = name;
   // keep editor disabled by default when opening a story
   setEditorEnabled(false);
+  // Display a clear, non-editable indicator in the editor so users know they're viewing the full story.
+  try {
+    editor.value = 'Full story';
+  } catch (e) { /* ignore */ }
   // mark sidebar as having an open story so splitter heights remain in effect
   try {
     const sidebarEl = document.getElementById('sidebar');

@@ -5,9 +5,18 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Story Writer</title>
   <link rel="stylesheet" href="style.css" />
-  <script src="https://unpkg.com/marked@4.4.12/marked.min.js"></script>
 </head>
 <body>
+  <div id="splash" style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);color:#fff;z-index:9999;flex-direction:column;gap:16px;padding:24px;">
+    <div style="background:#fff;color:#000;padding:28px;border-radius:8px;max-width:520px;text-align:center;">
+      <h2 style="margin-top:0">Please sign in to continue</h2>
+      <p style="margin:8px 0 16px 0">You must sign in with your account to create or edit stories.</p>
+      <div style="display:flex;gap:8px;justify-content:center">
+        <button id="splashLoginBtn" style="padding:8px 14px;font-size:16px">Log in with Auth0</button>
+        <button id="splashGuestBtn" style="padding:8px 14px;font-size:16px;display:none">Continue as guest</button>
+      </div>
+    </div>
+  </div>
   <div id="app">
     <aside id="sidebar">
       <div id="storiesPane" class="pane">
@@ -62,11 +71,19 @@
         <h1 id="currentStoryTitle" class="editable" tabindex="0">No story opened</h1>
         <div class="main-actions">
           <button id="saveBtn">Save</button>
+          <button id="publishBtn" style="display:none">Publish</button>
+          <button id="loginBtn" style="display:none">Log in</button>
+          <button id="logoutBtn" style="display:none">Log out</button>
         </div>
       </header>
 
       <section id="editorArea">
-        <textarea id="editor" placeholder="Write your story here..."></textarea>
+        <div class="editor-column" style="display:flex;flex-direction:column;flex:1;min-width:0">
+          <textarea id="editor" placeholder="Write your story here..." style="flex:1;min-width:0;height:100%;"></textarea>
+          <div id="editorCounters" class="small" style="margin-top:8px;">
+            Words: <span id="wc-total">0</span> / <span id="wc-current">0</span> &nbsp;&ndash;&nbsp; Characters: <span id="cc-total">0</span> / <span id="cc-current">0</span>
+          </div>
+        </div>
         <div id="preview" class="preview"></div>
       </section>
     </main>

@@ -26,7 +26,9 @@ aside#sidebar{
 .pane {
   display: flex;
   flex-direction: column;
-  overflow: auto;
+  /* allow vertical scrolling only; prevent horizontal scrollbar */
+  overflow-y: auto;
+  overflow-x: hidden;
   min-height: 40px;
 }
 
@@ -55,8 +57,19 @@ aside#sidebar { display: flex; flex-direction: column; }
 #storyList li.story-item .story-delete{padding:6px 8px;border-radius:4px;border:1px solid #ddd;background:#f2f3f7;font-size:13px;line-height:1;cursor:pointer}
 #storyList li.story-item .story-delete:hover{background:#eef4ff}
 
-#storyList, #highlightList, #locationList{list-style:none;margin:0;padding:0;overflow:auto;min-height:40px}
+#storyList{list-style:none;margin:0;padding:0;overflow-y:auto;overflow-x:hidden;min-height:40px}
+#highlightList, #locationList{list-style:none;margin:0;padding:0;overflow:auto;min-height:40px}
 #storyList li, #highlightList li, #locationList li{padding:6px;border-radius:4px;cursor:pointer}
+
+/* Ensure highlight list items align name, count and actions consistently.
+   Use flex layout so the actions container (set to margin-left:auto in JS)
+   stays right-justified and aligned across all items. */
+#highlightList li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 #storyList li:hover, #highlightList li:hover, #locationList li:hover{background:#f5f7ff}
 
 .story-actions{margin-top:auto;display:flex;flex-direction:column;gap:8px}
@@ -68,9 +81,26 @@ main#main{flex:1;display:flex;flex-direction:column;min-width:0;padding:16px}
 header{display:flex;align-items:center;justify-content:space-between;gap:12px}
 header h1{margin:0;font-size:18px}
 #editorArea{display:flex;gap:12px;flex:1;min-height:0;margin-top:12px}
-#editor{flex:1;min-width:0;height:100%;resize:none;padding:12px;border:1px solid #e6e7ee;border-radius:6px;background:#fff;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-.preview{flex:1;min-width:0;height:100%;overflow:auto;padding:12px;border:1px solid #e6e7ee;border-radius:6px;background:#fff}
+#editor{flex:1;min-width:0;resize:none;padding:12px;border:1px solid #e6e7ee;border-radius:6px;background:#fff;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.preview{flex:1;min-width:0;overflow:auto;padding:12px;border:1px solid #e6e7ee;border-radius:6px;background:#fff}
 .preview p{margin:0 0 8px 0}
+
+/* Ensure rendered images fit their container and never overflow the preview or other UI panels.
+   This constrains image width to the width of the element they're rendered into (responsive). */
+.preview img,
+.modal-content img,
+.story-content img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Ensure editor column and preview align bottoms:
+   keep both sides as flex children with min-height:0 so they stretch equally.
+   Make the textarea flex to fill the editor column (counters sit below it). */
+#editorArea > .editor-column { display:flex; flex-direction:column; flex:1; min-height:0; }
+#editorArea > .editor-column textarea { flex:1; min-height:0; height:auto; }
+#editorArea > .preview { align-self:stretch; min-height:0; }
 button{cursor:pointer}
 
 a.entity-hl{color:var(--accent-blue);text-decoration:underline;cursor:default}
@@ -137,6 +167,24 @@ a.entity-loc{color:var(--accent-green);text-decoration:underline;cursor:pointer}
   padding: 2px 4px;
 }
 
+/* When no story is open, allow the stories pane to expand to fill the sidebar.
+   The sidebar gains/removes the "story-open" class from JS when opening/closing a story.
+   These rules override the splitter-imposed heights so the stories list can populate
+   the full left menu when nothing is open. */
+#sidebar:not(.story-open) #storiesPane {
+  height: auto !important;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* collapse tiles/highlights panes visually when no story is open so they don't consume fixed height */
+#sidebar:not(.story-open) #tilesPane,
+#sidebar:not(.story-open) #highlightsPane {
+  height: auto !important;
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
 /* Tiles drag-and-drop insertion indicators */
 .tile-item {
   position: relative;
@@ -162,4 +210,27 @@ a.entity-loc{color:var(--accent-green);text-decoration:underline;cursor:pointer}
 /* subtle hover state for tile items */
 .tile-item:hover {
   background: rgba(30,144,255,0.03);
+}
+
+/* Highlights with no tags: make them visually obvious (fluorescent yellow) */
+.tag.no-tags {
+  background: #fff55a;
+  color: #111;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+
+/* entity words in the preview that correspond to highlights with no tags */
+a.entity-hl.no-tags {
+  background: #fff55a;
+  color: #111;
+  padding: 0.08em 0.35em;
+  border-radius: 6px;
+  text-decoration: underline;
+}
+
+/* Local Mode label (displayed next to the Log Out button in local/dev mode) */
+.local-mode {
+  color: #c00;
+  font-weight: 700;
+  margin-left: 8px;
 }

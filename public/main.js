@@ -51,15 +51,99 @@ const api = {
   }).then(r => r.json())
 };
 
+// Highlights API client helpers
+api.listHighlights = (name) => fetch(`/api/stories/${encodeURIComponent(name)}/highlights`).then(r => r.json());
+api.getHighlight = (name, id) => fetch(`/api/stories/${encodeURIComponent(name)}/highlights/${encodeURIComponent(id)}`).then(r => r.json());
+api.createHighlight = (name, title, content = '') => fetch(`/api/stories/${encodeURIComponent(name)}/highlights`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ title, content })
+}).then(r => r.json());
+api.saveHighlight = (name, id, content) => fetch(`/api/stories/${encodeURIComponent(name)}/highlights/${encodeURIComponent(id)}/save`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ content })
+}).then(r => r.json());
+api.renameHighlight = (name, id, newName) => fetch(`/api/stories/${encodeURIComponent(name)}/highlights/${encodeURIComponent(id)}/rename`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ newName })
+}).then(r => r.json());
+api.deleteHighlight = (name, id) => fetch(`/api/stories/${encodeURIComponent(name)}/highlights/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(r => r.json());
+
+ // Publish button state checker (global)
+// Enables the Publish button only when:
+//  - the user is authenticated (heuristic: logout button visible)
+//  - a story is open
+//  - there is at least one tile with non-empty content
+async function updatePublishButtonState() {
+  const publishBtn = document.getElementById('publishBtn');
+  if (!publishBtn) return;
+
+  // Determine authentication status from the server to avoid races with UI updates.
+  let isAuth = false;
+  try {
+    const st = await fetch('/api/auth-status').then(r => r.json()).catch(() => null);
+    isAuth = !!(st && st.ok && st.authenticated);
+  } catch (e) {
+    isAuth = false;
+  }
+
+  // If not authenticated or no story open, hide/disable publish
+  if (!isAuth || !state.currentStory) {
+    publishBtn.style.display = isAuth ? 'inline-block' : 'none';
+    publishBtn.disabled = true;
+    return;
+  }
+
+  publishBtn.style.display = 'inline-block';
+  publishBtn.disabled = true;
+
+  try {
+    // Try to get tiles list
+    const listRes = await api.listTiles(state.currentStory).catch(() => null);
+
+    // If tiles call failed or returned empty, fall back to checking story text (state.storyData.text)
+    const tiles = (listRes && listRes.ok && Array.isArray(listRes.tiles)) ? listRes.tiles : [];
+
+  // If there are no tiles, publishing is not allowed (tiles are the single source of truth)
+    if (tiles.length === 0) {
+      publishBtn.disabled = true;
+      return;
+    }
+
+    // Check tiles in parallel for non-empty content
+    const checks = await Promise.all(tiles.map(async (t) => {
+      try {
+        const tileRes = await api.getTile(state.currentStory, t.id).catch(() => null);
+        return !!(tileRes && tileRes.ok && (tileRes.content || '').trim().length > 0);
+      } catch (e) {
+        return false;
+      }
+    }));
+
+    // Also consider main story text as a fallback source
+    const mainTextNonEmpty = !!(state.storyData && state.storyData.text && String(state.storyData.text).trim().length > 0);
+
+    const hasNonEmpty = checks.some(Boolean) || mainTextNonEmpty;
+    publishBtn.disabled = !hasNonEmpty;
+  } catch (e) {
+    // On unexpected errors, be permissive so users can still attempt to publish
+    publishBtn.disabled = false;
+  }
+}
+
 // --- state ---
 const state = {
   currentStory: null,
   storyData: null, // result of GET /api/stories/:name
   // currentView indicates what the editor is showing:
   // { type: 'text'|'highlights', name?: string }
-  currentView: { type: 'text', name: null },
+  currentView: { type: null, name: null },
   // activeTagFilter holds the currently selected tag used to filter highlight lists (null = no filter)
-  activeTagFilter: null
+  activeTagFilter: null,
+  // bubbleTag: single-tag "bubble" ordering (non-destructive) — when set, highlights containing this tag are shown first
+  bubbleTag: null
 };
 // autosave timer handle (debounced saves while typing)
 let autosaveTimer = null;
@@ -167,19 +251,38 @@ if (globalFileInput) {
           console.warn('autosave after image insert failed', err);
         }
       } else if (ctx.mode === 'entity') {
-        // append image markdown to section (highlights.md)
-        const filename = 'highlights.md';
-        const raw = state.storyData && state.storyData.highlights ? state.storyData.highlights : '';
-        const sections = parseEntitySections(raw);
-        const entry = sections[ctx.name] || { title: ctx.name, desc: '' };
-        entry.desc = (entry.desc ? entry.desc + '\n\n' : '') + `![${file.name}](${url})`;
-        sections[ctx.name] = entry;
-        const newContent = Object.values(sections).map(s => composeSection(s.title, s.desc)).join('\n\n');
-        const saveRes = await api.saveFile(state.currentStory, filename, newContent);
-        if (!saveRes || !saveRes.ok) return alert(saveRes && saveRes.error ? saveRes.error : 'Save failed');
-        const updated = await api.getStory(state.currentStory);
-        if (updated && updated.ok) state.storyData = updated;
-        renderPreview();
+        // append image markdown to the per-highlight file (create if missing)
+        try {
+          const map = state.highlightsMap || {};
+          let entry = map[ctx.name];
+          let content = '';
+
+          if (entry && entry.id) {
+            const got = await api.getHighlight(state.currentStory, entry.id).catch(() => null);
+            content = (got && got.ok) ? (got.content || '') : (entry.desc || '');
+          } else {
+            // create a minimal section if missing
+            content = `## ${ctx.name}\n\n`;
+          }
+
+          content = content + (content.trim() ? '\n\n' : '') + `![${file.name}](${url})`;
+
+          if (entry && entry.id) {
+            const saveRes = await api.saveHighlight(state.currentStory, entry.id, content);
+            if (!saveRes || !saveRes.ok) return alert(saveRes && saveRes.error ? saveRes.error : 'Save failed');
+          } else {
+            const cr = await api.createHighlight(state.currentStory, ctx.name, content);
+            if (!cr || !cr.ok) return alert(cr && cr.error ? cr.error : 'Create failed');
+          }
+
+          const updated = await api.getStory(state.currentStory);
+          if (updated && updated.ok) state.storyData = updated;
+          await refreshEntityLists();
+          renderPreview();
+        } catch (err) {
+          console.error('upload->entity save failed', err);
+          alert('Save failed');
+        }
       }
     } catch (err) {
       console.error('upload handler error', err);
@@ -248,7 +351,9 @@ function tagStyleFor(tag) {
 /* Extract tags from text (global utility) — returns unique tag strings without the leading '#' */
 function extractTagsFromText(t) {
   if (!t || typeof t !== 'string') return [];
-  const re = /#([A-Za-z0-9_-]+)/g;
+  // Allow Unicode letters (including accented characters) in tag names.
+  // Use Unicode property escapes with the 'u' flag to match any letter or number.
+  const re = /#([\p{L}\p{N}_-]+)/gu;
   const set = new Set();
   let m;
   while ((m = re.exec(t)) !== null) {
@@ -265,7 +370,8 @@ function renderTags(root) {
     const txt = textNode.nodeValue;
     if (!txt || !txt.trim()) return;
 
-    const re = /#([A-Za-z0-9_-]+)/g;
+    // Accept Unicode letters (including accented characters) in tag names.
+    const re = /#([\p{L}\p{N}_-]+)/gu;
     let m;
     const matches = [];
     while ((m = re.exec(txt)) !== null) {
@@ -389,7 +495,7 @@ function simpleMarkdownToHtml(md) {
     }
 
     // list items
-    const li = raw.match(/^\s*[-*]\s+(.*)/);
+    const li = raw.match(/^\s*\*\s+(.*)/);
     if (li) {
       if (!inList) { html += '<ul>'; inList = true; }
       let content = escapeHtml(li[1]);
@@ -432,13 +538,72 @@ function simpleMarkdownToHtml(md) {
   return html;
 }
 
+/* --------------------
+   Counting helpers
+   --------------------
+   sanitizeForCounting(text): removes image markdown (![alt](url)) and tags (#tag)
+   countWords(text): returns number of word tokens (Unicode-aware)
+   countChars(text): returns character count including spaces (per spec)
+   updateCounters(totalText, currentText): updates DOM nodes under #editorCounters
+*/
+function sanitizeForCounting(text) {
+  if (!text || typeof text !== 'string') return '';
+  // remove markdown images: ![alt](url)
+  let s = text.replace(/!\[[^\]]*]\)]*\)/g, ' ');
+  // remove tags like #keyword (allow accented letters in tags)
+  s = s.replace(/#[\p{L}\p{N}_-]+/gu, ' ');
+  // normalize whitespace
+  s = s.replace(/\s+/g, ' ').trim();
+  return s;
+}
+
+function countWords(text) {
+  const s = sanitizeForCounting(text);
+  if (!s) return 0;
+  // Unicode-aware word matcher: letters, numbers, underscores and apostrophes are allowed inside words
+  try {
+    const matches = s.match(/\b[\p{L}\p{N}_']+\b/gu);
+    return matches ? matches.length : 0;
+  } catch (e) {
+    // Fallback for environments without Unicode property escapes
+    const matches = s.match(/\b[\w']+\b/g);
+    return matches ? matches.length : 0;
+  }
+}
+
+function countChars(text) {
+  const s = sanitizeForCounting(text);
+  return s.length;
+}
+
+function updateCounters(totalText, currentText) {
+  try {
+    const wcTotalEl = document.getElementById('wc-total');
+    const wcCurrentEl = document.getElementById('wc-current');
+    const ccTotalEl = document.getElementById('cc-total');
+    const ccCurrentEl = document.getElementById('cc-current');
+    const totalWords = countWords(totalText || '');
+    const currentWords = countWords(currentText || '');
+    const totalChars = countChars(totalText || '');
+    const currentChars = countChars(currentText || '');
+    if (wcTotalEl) wcTotalEl.textContent = totalWords.toLocaleString();
+    if (wcCurrentEl) wcCurrentEl.textContent = currentWords.toLocaleString();
+    if (ccTotalEl) ccTotalEl.textContent = totalChars.toLocaleString();
+    if (ccCurrentEl) ccCurrentEl.textContent = currentChars.toLocaleString();
+  } catch (e) {
+    // don't let counters break the app
+    console.warn('updateCounters failed', e);
+  }
+}
+
 function countOccurrences(text, name) {
   // guard: name required
   if (!name) return 0;
   // coerce non-strings to safe string values (defensive: avoids .match TypeError)
   if (typeof text !== 'string') text = String(text || '');
   if (!text) return 0;
-  const re = new RegExp(`\\b${escapeRegExp(name)}\\b`, 'gi');
+  // Use whole-word, case-sensitive matching for counts (aligns with UI highlight behavior).
+  const re = new RegExp(`\\b${escapeRegExp(name)}\\b`, 'g');
   const m = text.match(re);
   return m ? m.length : 0;
 }
@@ -448,15 +613,39 @@ async function refreshStories() {
   const res = await api.listStories();
   if (!res || !res.ok) return;
  storyList.innerHTML = '';
-  for (const s of res.stories) {
+
+  // Normalize stories into {id, name} objects and sort alphabetically by name.
+  const storiesArr = (res.stories || []).map(s => {
+    const id = (typeof s === 'string') ? s : (s.id || s.name || '');
+    const name = (typeof s === 'string') ? s : (s.name || s.id || '');
+    return { id, name };
+  });
+
+  storiesArr.sort((a, b) => a.name.localeCompare(b.name));
+
+  // If a story is currently open, bring it to the front (but keep others alphabetized).
+  if (state.currentStory) {
+    const idx = storiesArr.findIndex(x => x.id === state.currentStory);
+    if (idx > 0) {
+      const [item] = storiesArr.splice(idx, 1);
+      storiesArr.unshift(item);
+    }
+  }
+
+  for (const s of storiesArr) {
     const li = document.createElement('li');
     li.className = 'story-item';
     const nameSpan = document.createElement('span');
-    nameSpan.textContent = s;
-    nameSpan.dataset.name = s;
+
+    const storyId = s.id;
+    const displayName = s.name;
+
+    nameSpan.textContent = displayName;
+    nameSpan.dataset.name = storyId;
+
     // apply explicit classes so styling is consistent and easy to override
     if (state.currentStory) {
-      if (state.currentStory !== s) {
+      if (state.currentStory !== storyId) {
         nameSpan.classList.add('story-item--muted');
         nameSpan.classList.remove('story-item--active');
       } else {
@@ -468,7 +657,8 @@ async function refreshStories() {
       nameSpan.classList.remove('story-item--muted');
       nameSpan.classList.remove('story-item--active');
     }
-    nameSpan.addEventListener('click', () => openStory(s));
+
+    nameSpan.addEventListener('click', () => openStory(storyId));
     li.appendChild(nameSpan);
 
     // delete button (asks for confirmation before deleting the story folder)
@@ -477,12 +667,12 @@ async function refreshStories() {
     del.textContent = 'Delete';
     del.addEventListener('click', async (ev) => {
       ev.stopPropagation();
-      if (!confirm(`Delete story "${s}" and all its files/images? This cannot be undone.`)) return;
+      if (!confirm(`Delete story "${displayName}" and all its files/images? This cannot be undone.`)) return;
       try {
-        const rr = await api.deleteStory(s);
+        const rr = await api.deleteStory(storyId);
         if (!rr || !rr.ok) return alert(rr && rr.error ? rr.error : 'Delete failed');
         // if the deleted story is currently open, perform a full close action so UI matches user pressing Close
-        if (state.currentStory === s) {
+        if (state.currentStory === storyId) {
           try { closeCurrentStory(); } catch (e) {
             // fallback: perform minimal cleanup if closeCurrentStory is unavailable
             state.currentStory = null;
@@ -544,12 +734,16 @@ currentStoryTitle.addEventListener('click', async () => {
       }
     }
     // render into preview (read-only mode)
-    const html = (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function')
-      ? (marked.parse(combined || ''))
-      : simpleMarkdownToHtml(combined || '');
+    const html = simpleMarkdownToHtml(combined || '');
     preview.innerHTML = html || '<div class="empty-preview">[no tiles]</div>';
     // ensure #tags are rendered as pill elements in the concatenated full view as well
     try { renderTags(preview); } catch (e) { console.warn('renderTags failed on full view', e); }
+
+    // update counters: total is concatenated tiles, current is editor value if editing a tile
+    try {
+      const currentText = (state.currentView && state.currentView.type === 'tile') ? (editor.value || '') : '';
+      updateCounters(combined, currentText);
+    } catch (e) { /* ignore */ }
   } catch (e) {
     console.error('show full tiles failed', e);
     // on error, fall back to editor text preview but keep full view state
@@ -597,7 +791,7 @@ currentStoryTitle.addEventListener('blur', async () => {
 function closeCurrentStory() {
   state.currentStory = null;
   state.storyData = null;
-  state.currentView = { type: 'text', name: null };
+  state.currentView = { type: null, name: null };
   currentStoryTitle.textContent = 'No story opened';
   editor.value = '';
   // clear preview so any rendered tags/pills are removed when closing
@@ -613,6 +807,14 @@ function closeCurrentStory() {
   if (storyTagsEl && storyTagsEl.parentNode) storyTagsEl.parentNode.removeChild(storyTagsEl);
   // disable editor area when no story is open
   setEditorEnabled(false);
+  // reset counters when no story is opened
+  try { updateCounters('', ''); } catch (e) { /* ignore */ }
+  // ensure sidebar reflects that no story is open so storiesPane can expand
+  try {
+    const sidebarEl = document.getElementById('sidebar');
+    if (sidebarEl) sidebarEl.classList.remove('story-open');
+  } catch (e) { /* ignore */ }
+
   // refresh the stories list so the left menu updates (non-open stories appear grey)
   refreshStories();
 }
@@ -635,6 +837,15 @@ async function openStory(name) {
   currentStoryTitle.textContent = name;
   // keep editor disabled by default when opening a story
   setEditorEnabled(false);
+  // Display a clear, non-editable indicator in the editor so users know they're viewing the full story.
+  try {
+    editor.value = 'Full story';
+  } catch (e) { /* ignore */ }
+  // mark sidebar as having an open story so splitter heights remain in effect
+  try {
+    const sidebarEl = document.getElementById('sidebar');
+    if (sidebarEl) sidebarEl.classList.add('story-open');
+  } catch (e) { /* ignore */ }
 
   // ensure tiles and highlights areas visible and load tiles; render concatenated tiles into preview
   if (tilesSection) tilesSection.style.display = 'block';
@@ -702,144 +913,36 @@ async function saveMainText() {
     return;
   }
 
-  if (view === 'text') {
-    // saving main story text (replace entire text.md)
+  
+
+  // saving an entity when viewing a single highlight file: persist the editor content
+  // to the per-highlight markdown file via the highlights API.
+  if (state.currentView && state.currentView.type === 'highlight') {
+    const id = state.currentView && state.currentView.id;
+    if (!id) return console.warn('saveMainText: no highlight id');
     const content = editor.value;
-    const res = await api.saveFile(state.currentStory, 'text.md', content);
+    const res = await api.saveHighlight(state.currentStory, id, content);
     if (!res || !res.ok) {
-      console.warn('saveMainText: failed to save text.md', res && res.error);
+      console.warn('saveMainText: failed to save highlight', res && res.error);
       return;
     }
-    const updated = await api.getStory(state.currentStory);
-    if (updated && updated.ok) state.storyData = updated;
-    refreshEntityLists();
-    console.log('Saved text.md');
-    return;
-  }
-
-  // saving an entity (highlights.md) — merge edited section into the existing file (preserving other sections)
-  const filename = 'highlights.md';
-  const raw = (state.storyData && state.storyData.highlights) ? state.storyData.highlights : '';
-  const arr = parseEntitySectionsArray(raw);
-
-  // parse the editor content which should be in the form "## Name\n\nDescription..."
-  // IMPORTANT: do not trim the full editor content — preserve trailing newlines and cursor position.
-  const editedRaw = (editor.value || '');
-  const lines = editedRaw.split(/\r?\n/);
-  let editedTitle = state.currentView && state.currentView.name ? state.currentView.name : null;
-  let editedDesc = '';
-
-  if (lines.length > 0 && lines[0].match(/^#{1,6}\s+/)) {
-    // title: trim only the heading text, but keep the description verbatim (no .trim())
-    editedTitle = lines[0].replace(/^#{1,6}\s+/, '').trim();
-    editedDesc = lines.slice(1).join('\n');
-  } else {
-    // no explicit heading — treat entire content as description (preserve whitespace)
-    editedDesc = editedRaw;
-  }
-
-  if (!editedTitle) {
-    console.warn('saveMainText: cannot determine entity title; aborting save');
-    return;
-  }
-
-  // Avoid unnecessary saves that reset content/cursor:
-  // Compare the current in-editor description with the one stored on disk for this entity.
-  // If identical (including trailing newlines) and no rename occurred, skip saving entirely.
-  try {
-    const storedMap = parseEntitySections(raw);
-    const originalName = state.currentView && state.currentView.name ? state.currentView.name : null;
-
-    // If the title was not changed and the stored description matches the edited one, skip save.
-    if (originalName && editedTitle === originalName) {
-      const storedEntry = storedMap[originalName];
-      const storedDesc = storedEntry ? storedEntry.desc : '';
-      if (storedDesc === editedDesc) {
-        console.debug('[debug] saveMainText: no changes detected for', editedTitle, '- skipping save');
-        return;
+    // refresh highlights list and story data so counts and tags update
+    try {
+      const updatedList = await api.listHighlights(state.currentStory);
+      if (updatedList && updatedList.ok) {
+        // optionally refresh full story metadata if the backend exposes it
+        const updatedStory = await api.getStory(state.currentStory).catch(() => null);
+        if (updatedStory && updatedStory.ok) state.storyData = updatedStory;
       }
-    }
-
-    // If no original name available, fall back to checking by editedTitle.
-    // This is a conservative no-op check: only skip if an existing section with the
-    // same title already has an identical description.
-    if (!originalName && editedTitle) {
-      const storedEntry2 = storedMap[editedTitle];
-      const storedDesc2 = storedEntry2 ? storedEntry2.desc : '';
-      if (storedDesc2 === editedDesc) {
-        console.debug('[debug] saveMainText: no changes detected for', editedTitle, '- skipping save');
-        return;
-      }
-    }
-  } catch (e) {
-    console.warn('saveMainText: compare failed, proceeding to save', e);
-  }
-
-  // find index by original name (supports renames), otherwise by title, otherwise append
-  // We'll compute both indices and handle rename/collision deterministically.
-  let idx = -1;
-  if (state.currentView && state.currentView.name) {
-    idx = arr.findIndex(s => s.title === state.currentView.name);
-  }
-  if (idx === -1) {
-    idx = arr.findIndex(s => s.title === editedTitle);
-  }
-  if (idx === -1) {
-    // append new section
-    arr.push({ title: editedTitle, desc: editedDesc });
-  } else {
-    // replace existing section
-    arr[idx] = { title: editedTitle, desc: editedDesc };
-  }
-
-  const originalName = state.currentView && state.currentView.name ? state.currentView.name : null;
-  const idxOriginal = originalName ? arr.findIndex(s => s.title === originalName) : -1;
-  const idxEdited = arr.findIndex(s => s.title === editedTitle);
-
-  if (idxOriginal !== -1) {
-    if (idxEdited !== -1 && idxEdited !== idxOriginal) {
-      // Rename collided with an existing section. Keep the edited one and remove the original.
-      // Overwrite the existing target with edited content, then remove original.
-      arr[idxEdited] = { title: editedTitle, desc: editedDesc };
-      // If original comes after edited in array and indices shifted, find and remove by title to be safe
-      const remIdx = arr.findIndex(s => s.title === originalName);
-      if (remIdx !== -1) arr.splice(remIdx, 1);
-    } else {
-      // No collision: update original entry (rename or update description)
-      arr[idxOriginal] = { title: editedTitle, desc: editedDesc };
-    }
-  } else if (idxEdited !== -1) {
-    // Original not found but an entry with editedTitle exists — update it
-    arr[idxEdited] = { title: editedTitle, desc: editedDesc };
-  } else {
-    // append new section
-    arr.push({ title: editedTitle, desc: editedDesc });
-  }
-
-  // ensure unique titles (dedupe any accidental duplicates, keeping the first occurrence)
-  const seen = new Set();
-  const merged = [];
-  for (const s of arr) {
-    if (seen.has(s.title)) continue;
-    seen.add(s.title);
-    merged.push(s);
-  }
-
-  const newContent = merged.map(s => composeSection(s.title, s.desc)).join('\n\n');
-  const res = await api.saveFile(state.currentStory, filename, newContent);
-  if (!res || !res.ok) {
-    console.warn('saveMainText: failed to save', filename, res && res.error);
+    } catch (e) { /* ignore */ }
+    await refreshEntityLists();
+    console.log('Saved highlight', id);
     return;
   }
 
-  // refresh story data but do NOT overwrite the editor value or reset the cursor.
-  // Preserve state.currentView if possible; update storyData so counts/tooltips refresh.
-  const updated = await api.getStory(state.currentStory);
-  if (updated && updated.ok) {
-    state.storyData = updated;
-  }
-  refreshEntityLists();
-  console.log('Saved', filename, 'without disturbing the editor for', editedTitle);
+  // For other view types, fall back to existing highlights.md handling (if any)
+  // — but by default the app now uses per-highlight files and the above branch will be used.
+  console.debug('[debug] saveMainText: no per-highlight save performed (view=', state.currentView, ')');
 }
 
 function scheduleAutoSave(delay = 500) {
@@ -889,15 +992,46 @@ document.addEventListener('keydown', (e) => {
        console.warn('refreshEntityLists: failed to list tiles', e);
      }
    }
-   const hls = parseEntitySections(state.storyData && state.storyData.highlights ? state.storyData.highlights : '');
-   const text = mainText || '';
+  // Build highlights map by querying per-highlight API. Fall back to parsing highlights.md if API is unavailable.
+  const hls = {};
+  const text = mainText || '';
+  try {
+    if (state.currentStory) {
+      const listRes = await api.listHighlights(state.currentStory).catch(() => null);
+      if (listRes && listRes.ok && Array.isArray(listRes.highlights)) {
+        // fetch each highlight content in parallel (small projects expected)
+        const details = await Promise.all(listRes.highlights.map(async (h) => {
+          try {
+            const got = await api.getHighlight(state.currentStory, h.id).catch(() => null);
+            if (got && got.ok) {
+              return { id: h.id, title: got.title || h.title || h.id, content: got.content || '' };
+            }
+          } catch (e) {}
+          // fallback to title only if getHighlight fails
+          return { id: h.id, title: h.title || h.id, content: '' };
+        }));
+        for (const d of details) {
+          hls[d.title] = { id: d.id, title: d.title, desc: (d.content || '').replace(/^\s*#{1,6}\s+.*$/m, '').trim() };
+        }
+      } else {
+        // no highlights available from API; leave hls empty but log for debugging
+        console.warn('refreshEntityLists: no highlights returned from API', listRes);
+      }
+    }
+  } catch (e) {
+    // If per-highlight APIs fail, prefer empty map rather than falling back to highlights.md
+    console.warn('refreshEntityLists: failed to load per-highlight files via API', e);
+  }
 
-  const hlArr = Object.keys(hls).map(n => ({ name: n, count: countOccurrences(text, n) }));
+  // Persist a runtime cache of highlights loaded from per-highlight files so other renderers use them.
+  state.highlightsMap = hls || {};
+  // Build highlight array with occurrence counts and id references
+  const hlArr = Object.keys(hls).map(n => ({ name: n, id: hls[n] && hls[n].id ? hls[n].id : null, count: countOccurrences(text, n) }));
 
   // extract tags from a block of markdown/text — returns unique tags without the leading '#'
   function extractTagsFromText(t) {
     if (!t || typeof t !== 'string') return [];
-    const re = /#([A-Za-z0-9_-]+)/g;
+    const re = /#([\p{L}\p{N}_-]+)/gu;
     const set = new Set();
     let m;
     while ((m = re.exec(t)) !== null) {
@@ -946,19 +1080,49 @@ document.addEventListener('keydown', (e) => {
     // for story-level tags, extract from the main story text (not from highlights)
     const storyTagsArr = extractTagsFromText(mainText);
 
-    // If a tag filter is active, only show highlights that include that tag
-    const filteredArr = state.activeTagFilter
-      ? arr.filter(item => {
+    // If a strict filter is active, only show highlights that include that tag.
+    // Otherwise, if a bubbleTag is set, reorder the list so matching items appear first (stable).
+    let filteredArr;
+    if (state.activeTagFilter) {
+      filteredArr = arr.filter(item => {
         const desc = (hls && hls[item.name] && typeof hls[item.name].desc === 'string') ? hls[item.name].desc : '';
         const tags = extractTagsFromText(desc);
         return tags.includes(state.activeTagFilter);
-      })
-      : arr;
+      });
+    } else if (state.bubbleTag) {
+      // stable partition: matches first, then others in original sort order
+      const matches = [];
+      const others = [];
+      for (const item of arr) {
+        const desc = (hls && hls[item.name] && typeof hls[item.name].desc === 'string') ? hls[item.name].desc : '';
+        const tags = extractTagsFromText(desc);
+        if (tags.includes(state.bubbleTag)) matches.push(item);
+        else others.push(item);
+      }
+      filteredArr = matches.concat(others);
+    } else {
+      filteredArr = arr;
+    }
 
     for (const item of filteredArr) {
       const li = document.createElement('li');
 
       // name and count
+      // left column: title row (name + count) and tags stacked below
+      const left = document.createElement('div');
+      left.className = 'hl-left';
+      left.style.display = 'flex';
+      left.style.flexDirection = 'column';
+      left.style.flex = '1';
+      left.style.minWidth = '0';
+
+      const titleRow = document.createElement('div');
+      titleRow.className = 'hl-title-row';
+      titleRow.style.display = 'flex';
+      titleRow.style.alignItems = 'center';
+      titleRow.style.gap = '8px';
+      titleRow.style.minWidth = '0';
+
       const nameSpan = document.createElement('span');
       nameSpan.textContent = item.name;
       nameSpan.style.fontWeight = '500';
@@ -969,46 +1133,185 @@ document.addEventListener('keydown', (e) => {
       countSpan.textContent = `(${item.count})`;
       countSpan.style.marginRight = '8px';
 
-      li.appendChild(nameSpan);
-      li.appendChild(countSpan);
+      titleRow.appendChild(nameSpan);
+      titleRow.appendChild(countSpan);
+      left.appendChild(titleRow);
 
-      // If the highlight has zero occurrences, offer a Delete button to remove it.
-      // Do not show Delete when count > 0.
-      if (item.count === 0) {
-        const delHighlightBtn = document.createElement('button');
-        delHighlightBtn.textContent = 'Delete';
-        delHighlightBtn.style.marginLeft = '8px';
-        delHighlightBtn.addEventListener('click', async (ev) => {
-          ev.stopPropagation();
-          if (!confirm(`Delete highlight "${item.name}"? This will remove it from highlights.md`)) return;
+      // Actions: Rename + Delete (use per-highlight APIs when available)
+      const actionsDiv = document.createElement('div');
+      actionsDiv.style.display = 'inline-flex';
+      actionsDiv.style.gap = '6px';
+      actionsDiv.style.marginLeft = '8px';
+      actionsDiv.style.alignItems = 'center';
+
+      const renameBtn = document.createElement('button');
+      renameBtn.textContent = 'Rename';
+      renameBtn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        if (!state.currentStory) return alert('Open a story first');
+        const newTitle = prompt('New highlight title', item.name || '');
+        if (newTitle === null) return;
+
+        try {
+          if (!item.id) {
+            alert('Rename not supported for legacy highlights');
+            return;
+          }
+
+          // Preview: ask the server where replacements would occur (dry-run)
+          const previewUrl = `/api/stories/${encodeURIComponent(state.currentStory)}/highlights/${encodeURIComponent(item.id)}/rename-preview?newName=${encodeURIComponent(newTitle)}`;
+          let preview = null;
           try {
+            const pRes = await fetch(previewUrl);
+            preview = await pRes.json().catch(() => null);
+          } catch (e) {
+            preview = null;
+          }
+
+          // Decide whether to prompt the user. If there are zero occurrences, skip confirmation and just rename.
+          let shouldProceed = false;
+          let propagateChange = true; // default when we do prompt-based rename we propagate replacements
+          if (preview && preview.ok) {
+            const total = Number(preview.totalMatches || 0);
+            if (total === 0) {
+              // nothing to replace in files — perform metadata rename only without prompting
+              shouldProceed = true;
+              propagateChange = false;
+            }
+          }
+
+          // If we still need to confirm (preview unavailable or there are matches), build a preview message and ask the user.
+          if (!shouldProceed) {
+            // Build a concise preview message showing separate counts for tiles vs highlights.
+            let msg = `Rename "${item.name}" → "${newTitle}"\nThis operation is NOT reversible.\n\n`;
+            if (!preview || !preview.ok) {
+              msg += 'Preview unavailable (server error). Proceed with rename?';
+            } else {
+              // compute totals per scope
+              let tileMatches = 0;
+              let highlightMatches = 0;
+              for (const f of (preview.files || [])) {
+                try {
+                  if (typeof f.path === 'string' && f.path.startsWith('tiles/')) {
+                    for (const m of (f.matches || [])) tileMatches += (Number(m.count) || 0);
+                  } else if (typeof f.path === 'string' && f.path.startsWith('highlights/')) {
+                    for (const m of (f.matches || [])) highlightMatches += (Number(m.count) || 0);
+                  } else {
+                    // unknown folder — count as tile by default for visibility
+                    for (const m of (f.matches || [])) tileMatches += (Number(m.count) || 0);
+                  }
+                } catch (e) { /* ignore per-file counting errors */ }
+              }
+              msg += `Total Tile matches: ${tileMatches}\nTotal Highlight matches: ${highlightMatches}\n\nProceed with the rename and replace all matches?`;
+            }
+
+            const ok = confirm(msg);
+            if (!ok) return;
+            shouldProceed = true;
+            propagateChange = true;
+          }
+
+          // Perform rename + propagation
+          const renameUrl = `/api/stories/${encodeURIComponent(state.currentStory)}/highlights/${encodeURIComponent(item.id)}/rename`;
+          // respect propagateChange (when preview showed 0 matches we set propagateChange=false)
+          const body = { newName: newTitle, propagate: !!propagateChange };
+          const rRes = await fetch(renameUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          });
+          const rBody = await rRes.json().catch(() => null);
+          if (!rBody || !rBody.ok) {
+            return alert(rBody && rBody.error ? rBody.error : 'Rename failed');
+          }
+
+          // Refresh lists to reflect updated metadata and counts
+          await refreshEntityLists();
+
+          // Reload the current editor/view as if the user had clicked the corresponding list item.
+          // This ensures the editor and rendered preview are reloaded from the server and reflect the rename.
+          try {
+            if (state.currentView && state.currentView.type === 'highlight' && state.currentView.id === item.id) {
+              // reuse the existing openEntityInEditor flow to load the highlight afresh
+              openEntityInEditor('highlights', item.id, newTitle);
+            } else if (state.currentView && state.currentView.type === 'tile' && state.currentView.id) {
+              // reload the currently open tile content
+              const tid = state.currentView.id;
+              (async () => {
+                try {
+                  const tgot = await api.getTile(state.currentStory, tid);
+                  if (tgot && tgot.ok) {
+                    editor.value = tgot.content || '';
+                    // keep header showing story - tile title when possible
+                    try {
+                      const listRes = await api.listTiles(state.currentStory);
+                      const tileMeta = (listRes && listRes.ok && Array.isArray(listRes.tiles)) ? (listRes.tiles.find(x => x.id === tid) || {}) : {};
+                      currentStoryTitle.textContent = `${state.currentStory} - ${tileMeta.title || '(untitled)'}`;
+                    } catch (e) {}
+                    setEditorEnabled(true);
+                    editor.focus();
+                    renderPreview();
+                  }
+                } catch (e) { /* ignore */ }
+              })();
+            } else {
+              // otherwise just re-render preview to pick up renamed terms in the displayed text
+              try { renderPreview(); } catch (e) {}
+            }
+          } catch (e) {
+            console.warn('reload-after-rename failed', e);
+          }
+
+          // Show summary of what changed only when there were actual replacements.
+          // If no replacements were needed (metadata-only rename), skip the completion alert.
+          const sum = (rBody.summary && typeof rBody.summary === 'object') ? rBody.summary : null;
+          const replacements = sum && typeof sum.totalReplacements === 'number' ? sum.totalReplacements : 0;
+          if (replacements > 0) {
+            alert(`Rename completed. Replacements: ${replacements}. Files changed: ${sum.filesChanged ? sum.filesChanged.length : 0}.`);
+          }
+        } catch (err) {
+          console.error('rename highlight failed', err);
+          alert('Rename failed');
+        }
+      });
+      actionsDiv.appendChild(renameBtn);
+
+      const delBtn = document.createElement('button');
+      delBtn.textContent = 'Delete';
+      delBtn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        if (!confirm(`Delete highlight "${item.name}"? This cannot be undone.`)) return;
+        try {
+          if (item.id) {
+            const rr = await api.deleteHighlight(state.currentStory, item.id);
+            if (!rr || !rr.ok) return alert(rr && rr.error ? rr.error : 'Delete failed');
+          } else {
+            // fallback: remove from legacy highlights.md
             const filename = 'highlights.md';
             const raw = (state.storyData && state.storyData.highlights) ? state.storyData.highlights : '';
-            const arr = parseEntitySectionsArray(raw);
-            const idx = arr.findIndex(s => s.title === item.name);
-            if (idx === -1) {
-              // nothing to do
-              await refreshEntityLists();
-              return;
+            const arrLegacy = parseEntitySectionsArray(raw);
+            const idx = arrLegacy.findIndex(s => s.title === item.name);
+            if (idx !== -1) {
+              arrLegacy.splice(idx, 1);
+              const newContent = arrLegacy.map(s => composeSection(s.title, s.desc)).join('\n\n');
+              const r = await api.saveFile(state.currentStory, filename, newContent);
+              if (!r || !r.ok) return alert(r && r.error ? r.error : 'Delete failed');
             }
-            arr.splice(idx, 1);
-            const newContent = arr.map(s => composeSection(s.title, s.desc)).join('\n\n');
-            const res = await api.saveFile(state.currentStory, filename, newContent);
-            if (!res || !res.ok) {
-              alert(res && res.error ? res.error : 'Delete failed');
-              return;
-            }
-            const updated = await api.getStory(state.currentStory);
-            if (updated && updated.ok) state.storyData = updated;
-            await refreshEntityLists();
-          } catch (err) {
-            console.error('delete highlight failed', err);
-            alert('Delete failed');
           }
-        });
-        li.appendChild(delHighlightBtn);
-      }
-
+          // if currently editing this highlight, close editor and clear preview
+          if (state.currentView && state.currentView.type === 'highlight' && state.currentView.id === item.id) {
+            state.currentView = { type: null, name: null };
+            editor.value = '';
+            try { currentStoryTitle.textContent = state.currentStory || 'No story opened'; } catch (e) {}
+            renderPreview();
+          }
+          await refreshEntityLists();
+        } catch (err) {
+          console.error('delete highlight failed', err);
+          alert('Delete failed');
+        }
+      });
+      actionsDiv.appendChild(delBtn);
       // find tags inside the highlight description (if available in hls map)
       const desc = (hls && hls[item.name] && typeof hls[item.name].desc === 'string') ? hls[item.name].desc : '';
       const tags = extractTagsFromText(desc);
@@ -1023,21 +1326,31 @@ document.addEventListener('keydown', (e) => {
           tspan.style.color = st.color;
         }
         tspan.style.marginLeft = '6px';
-        // clicking a tag toggles the active filter; stopPropagation so the li click doesn't fire
+        // clicking a tag "bubbles" that tag to the top of the highlights list (non-destructive ordering)
         tspan.addEventListener('click', (ev) => {
           ev.stopPropagation();
-          if (state.activeTagFilter === tag) state.activeTagFilter = null;
-          else state.activeTagFilter = tag;
-          // re-render lists using the new filter
+          if (!state.currentStory) return;
+          // set bubbleTag (do not toggle off when clicking same tag)
+          state.bubbleTag = tag;
+          // clear strict filter if any (we only support bubbling now)
+          state.activeTagFilter = null;
+          // re-render lists using new bubble state
           refreshEntityLists(mainText);
         });
-        // visually mark selected tag
-        if (state.activeTagFilter === tag) tspan.classList.add('selected');
-        li.appendChild(tspan);
+        // visually mark bubbled tag (less prominent than .selected)
+        if (state.bubbleTag === tag) tspan.classList.add('bubbled');
+        left.appendChild(tspan);
       }
 
-      // click behavior: open the entity in the main editor
-      li.addEventListener('click', () => openEntityInEditor(type, item.name));
+      // place action buttons at the far right and ensure they stay aligned across items
+      // append the left column (title + tags) first so tags remain stacked under the title,
+      // then append the actions container which will sit to the right.
+      li.appendChild(left);
+      actionsDiv.style.marginLeft = '8px';
+      li.appendChild(actionsDiv);
+
+      // click behavior: open the entity in the main editor (pass id + name)
+      li.addEventListener('click', () => openEntityInEditor(type, item.id, item.name));
       container.appendChild(li);
     }
 
@@ -1059,14 +1372,15 @@ document.addEventListener('keydown', (e) => {
         }
         tspan.style.marginLeft = '6px';
         tspan.style.marginBottom = '0';
-        // clicking story tag also toggles the filter
+        // clicking story tag bubbles that tag to the top of the highlights list
         tspan.addEventListener('click', (ev) => {
           ev.stopPropagation();
-          if (state.activeTagFilter === tag) state.activeTagFilter = null;
-          else state.activeTagFilter = tag;
+          if (!state.currentStory) return;
+          state.bubbleTag = tag;
+          state.activeTagFilter = null;
           refreshEntityLists(mainText);
         });
-        if (state.activeTagFilter === tag) tspan.classList.add('selected');
+        if (state.bubbleTag === tag) tspan.classList.add('bubbled');
         storyTagsEl.appendChild(tspan);
       }
     }
@@ -1129,10 +1443,21 @@ document.addEventListener('keydown', (e) => {
     if (!(state.currentView && state.currentView.type === 'full')) {
       renderPreview();
     }
+
+    // update counters using the mainText we computed above and the current editor tile (if any)
+    try {
+      const currentText = (state.currentView && state.currentView.type === 'tile') ? (editor.value || '') : '';
+      updateCounters(text || '', currentText);
+    } catch (e) { /* ignore counter errors */ }
 }
 
  // sort change handlers
- if (hlSort) hlSort.addEventListener('change', () => refreshEntityLists());
+ if (hlSort) hlSort.addEventListener('change', () => {
+   // when the user changes sorting (A→Z / By count), remove any active bubbled tag
+   // so the list is fully resorted according to the selected sort mode.
+   try { state.bubbleTag = null; } catch (e) { /* ignore */ }
+   refreshEntityLists();
+ });
 
 /* --- Tiles UI & handlers --- */
 async function refreshTiles() {
@@ -1170,6 +1495,29 @@ async function refreshTiles() {
         try { currentStoryTitle.textContent = `${state.currentStory} - ${t.title || '(untitled)'}`; } catch (e) {}
         setEditorEnabled(true);
         renderPreview();
+
+        // update counters immediately for the selected tile and total project text
+        (async () => {
+          try {
+            // build combined text from all tiles (total)
+            const listRes = await api.listTiles(state.currentStory).catch(() => null);
+            const tilesAll = (listRes && listRes.ok && Array.isArray(listRes.tiles)) ? listRes.tiles : [];
+            if (tilesAll.length === 0) {
+              updateCounters('', editor.value || '');
+              return;
+            }
+            const parts = await Promise.all(tilesAll.map(async tt => {
+              try {
+                const r = await api.getTile(state.currentStory, tt.id).catch(() => null);
+                return (r && r.ok) ? (r.content || '') : '';
+              } catch (e) { return ''; }
+            }));
+            const combined = parts.filter(Boolean).join('\n\n');
+            updateCounters(combined, editor.value || '');
+          } catch (err) {
+            console.warn('Failed to update counters on tile click', err);
+          }
+        })();
       });
 
       const actions = document.createElement('div');
@@ -1201,8 +1549,8 @@ async function refreshTiles() {
         if (!rr || !rr.ok) return alert(rr && rr.error ? rr.error : 'Delete failed');
         // if currently editing this tile, close editor
         if (state.currentView && state.currentView.type === 'tile' && state.currentView.id === t.id) {
-          state.currentView = { type: 'text', name: null };
-          editor.value = state.storyData && state.storyData.text ? state.storyData.text : '';
+          state.currentView = { type: null, name: null };
+          editor.value = '';
           // restore header to just the story name
           try { currentStoryTitle.textContent = state.currentStory || 'No story opened'; } catch (e) {}
           renderPreview();
@@ -1303,9 +1651,7 @@ async function refreshTiles() {
                   console.warn('failed to load tile during full refresh', tt.id, err);
                 }
               }
-              const html2 = (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function')
-                ? marked.parse(combined2 || '')
-                : simpleMarkdownToHtml(combined2 || '');
+              const html2 = simpleMarkdownToHtml(combined2 || '');
               // preserve read-only state
               setEditorEnabled(false);
               preview.innerHTML = html2 || '<div class="empty-preview">[no tiles]</div>';
@@ -1322,6 +1668,45 @@ async function refreshTiles() {
     }
   } catch (e) {
     console.error('refreshTiles error', e);
+  } finally {
+    // After tiles are refreshed (or an error occurred), update the Publish button state.
+    // Prefer a direct, robust check here: query each tile's content (in parallel) and enable Publish
+    // if at least one tile contains non-empty content. This avoids races with separate async checks.
+    try {
+      const publishBtn = document.getElementById('publishBtn');
+      const logoutBtn = document.getElementById('logoutBtn');
+      const isAuthNow = !!(logoutBtn && logoutBtn.style.display !== 'none');
+      if (!publishBtn) return;
+      if (!isAuthNow || !state.currentStory) {
+        publishBtn.style.display = isAuthNow ? 'inline-block' : 'none';
+        publishBtn.disabled = true;
+      } else {
+        publishBtn.style.display = 'inline-block';
+        // if there are no tiles, keep disabled
+        const tilesEls = Array.from(tileList ? tileList.children : []);
+        if (tilesEls.length === 0) {
+          publishBtn.disabled = true;
+        } else {
+          // fetch tile contents in parallel with a conservative timeout via Promise.race if necessary
+          try {
+            const checks = await Promise.all(tilesEls.map(async (node) => {
+              const id = node && node.dataset && node.dataset.id ? node.dataset.id : null;
+              if (!id) return false;
+              const r = await api.getTile(state.currentStory, id).catch(() => null);
+              return !!(r && r.ok && (r.content || '').trim().length > 0);
+            }));
+            const hasNonEmpty = checks.some(Boolean);
+            publishBtn.disabled = !hasNonEmpty;
+          } catch (e) {
+            // On error be permissive so users can still attempt to publish
+            publishBtn.disabled = false;
+          }
+        }
+      }
+    } catch (err) {
+      // ignore publish state failures
+      console.warn('publish state update failed', err);
+    }
   }
 }
 
@@ -1378,37 +1763,8 @@ function renderPreview() {
     // Use marked when available; otherwise fall back to the simple renderer.
     // If marked isn't present, attempt to load it dynamically once and retry rendering.
     let html = '';
-    if (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function') {
-      try {
-        html = marked.parse(md || '');
-      } catch (err) {
-        console.warn('marked.parse failed, falling back to simple renderer', err);
-        html = simpleMarkdownToHtml(md || '');
-      }
-    } else {
-      // Try to load marked dynamically (only once). When it finishes loading we'll re-run renderPreview.
-      if (!window._markedLoading && !window._markedTriedToLoad) {
-        window._markedLoading = true;
-        window._markedTriedToLoad = true;
-        console.log('[debug] marked not found — injecting script to load marked from CDN');
-        const s = document.createElement('script');
-        s.src = 'https://unpkg.com/marked@4.4.12/marked.min.js';
-        s.async = true;
-        s.onload = () => {
-          window._markedLoading = false;
-          console.log('[debug] marked loaded dynamically; re-rendering preview');
-          try { renderPreview(); } catch (e) { console.warn('re-render after marked load failed', e); }
-        };
-        s.onerror = () => {
-          window._markedLoading = false;
-          console.warn('Failed to load marked from CDN; continuing with fallback renderer');
-        };
-        document.head.appendChild(s);
-      } else {
-        console.warn('marked not available, using simpleMarkdownToHtml fallback');
-      }
-      html = simpleMarkdownToHtml(md || '');
-    }
+    // Always use the built-in simpleMarkdownToHtml renderer (we do not load marked).
+    html = simpleMarkdownToHtml(md || '');
     // debug: log the actual HTML we will inject so we can inspect why headings appear as literal text
     try {
       console.log('[debug] rendered HTML preview (first 1000 chars):', (html || '').slice(0, 1000));
@@ -1428,8 +1784,8 @@ function renderPreview() {
     }
     console.log('[debug] preview rendered, html length=', (html || '').length, 'childNodes=', preview.childNodes.length, 'data-render-debug=', preview.getAttribute('data-render-debug'));
 
-    // derive entities from state if available, otherwise empty lists
-    const entityMap = parseEntitySections((state.storyData && state.storyData.highlights) || '');
+    // derive entities from per-highlight cache if available (state.highlightsMap)
+    const entityMap = state.highlightsMap || {};
     const hls = Object.keys(entityMap);
 
     // build combined list (highlights) and sort by length desc to prefer longest match
@@ -1442,15 +1798,16 @@ function renderPreview() {
       const txt = textNode.nodeValue;
       if (!txt || !txt.trim()) return;
 
-      // collect matches across all entity names
-      const matches = [];
-      for (const item of combined) {
-        const re = new RegExp(`\\b${escapeRegExp(item.name)}\\b`, 'gi');
-        let m;
-        while ((m = re.exec(txt)) !== null) {
-          matches.push({ index: m.index, text: m[0], name: item.name, cls: item.cls, length: m[0].length });
-        }
+    // collect matches across all entity names
+    const matches = [];
+    for (const item of combined) {
+      // Use case-sensitive matching (no 'i' flag) and whole-word boundaries.
+      const re = new RegExp(`\\b${escapeRegExp(item.name)}\\b`, 'g');
+      let m;
+      while ((m = re.exec(txt)) !== null) {
+        matches.push({ index: m.index, text: m[0], name: item.name, cls: item.cls, length: m[0].length });
       }
+    }
       if (matches.length === 0) return;
 
       // sort matches by index and filter overlaps (keep earliest, then skip overlaps)
@@ -1483,6 +1840,8 @@ function renderPreview() {
         const ent = entityMap && entityMap[mt.name] ? entityMap[mt.name] : null;
         const entTags = ent ? extractTagsFromText(ent.desc) : [];
         if (entTags && entTags.length > 0) {
+          // ensure any previous no-tags marker is removed so CSS for tagged highlights applies
+          a.classList.remove('no-tags');
           const st = tagStyleFor(entTags[0]);
           // apply pill background and text color; add subtle padding & radius to mimic the pill
           if (st && st.background) a.style.background = st.background;
@@ -1491,10 +1850,13 @@ function renderPreview() {
           a.style.borderRadius = '6px';
           a.style.textDecoration = 'underline';
         } else {
-          // no tag -> plain black text, no background
-          a.style.background = 'transparent';
-          a.style.color = '#000';
-          a.style.textDecoration = 'underline';
+          // no tag -> mark as no-tags so CSS will render fluorescent yellow (clear inline styles first)
+          a.classList.add('no-tags');
+          a.style.background = '';
+          a.style.color = '';
+          a.style.padding = '';
+          a.style.borderRadius = '';
+          a.style.textDecoration = '';
         }
       } catch (e) {
         // if anything goes wrong, fallback to default link color (do nothing)
@@ -1544,9 +1906,15 @@ function onEntityHover(ev) {
   const name = a.dataset.entityName;
   const type = a.dataset.entityType;
   if (!state.storyData) return;
-  const raw = state.storyData[type] || '';
-  const map = parseEntitySections(raw);
-  const entry = map[name] || { title: name, desc: '' };
+  const map = state.highlightsMap || {};
+  let entry = map[name];
+  if (!entry) {
+    // try case-insensitive lookup
+    for (const k in map) {
+      if (k && k.toLowerCase() === String(name || '').toLowerCase()) { entry = map[k]; break; }
+    }
+  }
+  if (!entry) entry = { title: name, desc: '' };
   const images = state.storyData.images && state.storyData.images[type] ? state.storyData.images[type] : [];
 
   // choose image to show in tooltip:
@@ -1625,47 +1993,77 @@ function openEntityEditor(type, name) {
 
 closeEntityBtn.addEventListener('click', () => entityModal.classList.add('hidden'));
 
-function openEntityInEditor(type, name) {
+function openEntityInEditor(type, id, title) {
   if (!state.currentStory) return alert('Open a story first');
-  state.currentView = { type, name };
-  const raw = state.storyData && state.storyData.highlights ? state.storyData.highlights : '';
-  const map = parseEntitySections(raw);
-  const entry = map[name] || { title: name, desc: '' };
-  // load the entity as markdown into the editor so it behaves like the main text
-  editor.value = composeSection(entry.title, entry.desc);
-  // enable editor because user is editing a highlight
-  setEditorEnabled(true);
-  try { editor.focus(); } catch (e) {}
-  renderPreview();
+  (async () => {
+    try {
+      if (!id) {
+        // fallback to legacy behavior if id missing: open by name from highlights.md
+        const raw = state.storyData && state.storyData.highlights ? state.storyData.highlights : '';
+        const map = parseEntitySections(raw);
+        const entry = map[title] || { title: title, desc: '' };
+        editor.value = composeSection(entry.title, entry.desc);
+        state.currentView = { type: 'highlight', id: null };
+        setEditorEnabled(true);
+        renderPreview();
+        return;
+      }
+      const got = await api.getHighlight(state.currentStory, id);
+      if (!got || !got.ok) {
+        alert(got && got.error ? got.error : 'Failed to load highlight');
+        return;
+      }
+      state.currentView = { type: 'highlight', id: id };
+      // load the file content as-is (do NOT auto-insert a heading when content is empty)
+      editor.value = got.content || '';
+      // update header to show "story - highlight title"
+      try { currentStoryTitle.textContent = `${state.currentStory} - ${got.title || title}`; } catch (e) {}
+      setEditorEnabled(true);
+      editor.focus();
+      renderPreview();
+    } catch (err) {
+      console.error('openEntityInEditor failed', err);
+      alert('Failed to open highlight');
+    }
+  })();
 }
 
 saveEntityBtn.addEventListener('click', async () => {
   if (!currentEditing || !currentEditing.name) return;
   const { type, name } = currentEditing;
-  const filename = 'highlights.md';
-  const raw = state.storyData && state.storyData.highlights ? state.storyData.highlights : '';
-  const map = parseEntitySections(raw);
-  map[name] = { title: name, desc: (entityContent.value || '') };
+  let content = (entityContent.value || '');
 
-  // if an image was selected, upload it to the story images and then proceed
+  // if an image was selected, upload it first and append to content
   const file = entityImageInput.files[0];
   if (file) {
     const up = await api.uploadImage(state.currentStory, 'highlights', file);
     if (!up || !up.ok) return alert(up && up.error ? up.error : 'Image upload failed');
-    // refresh state to include the new image
-    const updated = await api.getStory(state.currentStory);
-    if (updated && updated.ok) state.storyData = updated;
+    const url = up.url;
+    if (url) {
+      content = (content ? content + '\n\n' : content) + `![${file.name}](${url})`;
+    }
   }
 
-  const sections = Object.values(map).map(e => composeSection(e.title, e.desc));
-  const newContent = sections.join('\n\n');
-  const res = await api.saveFile(state.currentStory, filename, newContent);
-  if (!res || !res.ok) return alert(res && res.error ? res.error : 'Save failed');
-  const updated = await api.getStory(state.currentStory);
-  if (updated && updated.ok) {
-    state.storyData = updated;
+  // find existing entry id (if any) from runtime cache
+  const map = state.highlightsMap || {};
+  const entry = map[name];
+
+  try {
+    if (entry && entry.id) {
+      const res = await api.saveHighlight(state.currentStory, entry.id, content);
+      if (!res || !res.ok) throw new Error(res && res.error ? res.error : 'Save failed');
+    } else {
+      const res = await api.createHighlight(state.currentStory, name, content);
+      if (!res || !res.ok) throw new Error(res && res.error ? res.error : 'Create failed');
+    }
+
+    // refresh story metadata and highlights list
+    const updatedStory = await api.getStory(state.currentStory).catch(() => null);
+    if (updatedStory && updatedStory.ok) state.storyData = updatedStory;
     entityModal.classList.add('hidden');
-    refreshEntityLists();
+    await refreshEntityLists();
+  } catch (err) {
+    alert(err && err.message ? err.message : 'Save failed');
   }
 });
 
@@ -1748,32 +2146,22 @@ function openNewEntityModal(type, name) {
 }
 
 async function createEntityAndOpen(type, name, openAfter = true) {
-  // create the entity entry (if missing) in the highlights.md file, refresh state, then optionally open it in editor
   if (!state.currentStory) throw new Error('Open a story first');
-  const filename = 'highlights.md';
-  const raw = state.storyData && state.storyData.highlights ? state.storyData.highlights : '';
-  const map = parseEntitySections(raw);
-
-  // if already exists, just open it (or refresh lists)
-  const arr = parseEntitySectionsArray(raw);
-  const existingIdx = arr.findIndex(s => s.title === name);
-  if (existingIdx === -1) {
-    arr.push({ title: name, desc: '' });
-    const newContent = arr.map(s => composeSection(s.title, s.desc)).join('\n\n');
-    const res = await api.saveFile(state.currentStory, filename, newContent);
-    if (!res || !res.ok) throw new Error(res && res.error ? res.error : 'Save failed');
-    const updated = await api.getStory(state.currentStory);
-    if (updated && updated.ok) state.storyData = updated;
-    await refreshEntityLists();
-  } else {
-    // ensure lists are up to date
-    await refreshEntityLists();
-  }
-
-  // optionally open the new entity in the main editor
-  if (openAfter) {
-    openEntityInEditor('highlights', name);
-  }
+  // create a per-highlight markdown file via API
+    try {
+      // Create the highlight with empty content by default (highlights.json holds the title).
+      const res = await api.createHighlight(state.currentStory, name, '');
+      if (!res || !res.ok) throw new Error(res && res.error ? res.error : 'Create failed');
+      // refresh highlights list
+      await refreshEntityLists();
+      if (openAfter) {
+        // open newly created highlight
+        openEntityInEditor('highlights', res.id, res.title || name);
+      }
+    } catch (err) {
+      console.error('createEntityAndOpen failed', err);
+      throw err;
+    }
 }
 
 /* clicking highlighted entity no longer opens the editor.
@@ -1860,6 +2248,243 @@ preview.addEventListener('contextmenu', (ev) => {
  setEditorEnabled(false);
  // hide highlights until a story is opened
  if (highlightSection) highlightSection.style.display = 'none';
+
+ // --- Auth: check session and show splash / login / logout ---
+ const loginBtn = document.getElementById('loginBtn');
+ const logoutBtn = document.getElementById('logoutBtn');
+ const splashLoginBtn = document.getElementById('splashLoginBtn');
+ const splashEl = document.getElementById('splash');
+
+function applyAuthStatus(status) {
+  // localMode takes precedence: when status.localMode is true we simulate an authenticated local user.
+  const localMode = !!(status && status.localMode === true);
+  const isAuth = localMode ? true : (status && status.authenticated);
+  // If the user is authenticated but their email is not verified, inform them and log them out.
+  // This prevents unverified accounts from using editing features.
+  if (!localMode && isAuth && status && status.user && status.user.email_verified === false) {
+    try {
+      // show a clear message and then redirect to /logout to end the session
+      alert('Please verify your email address before using this service. You will be logged out.');
+    } catch (e) {
+      /* ignore alert failures in non-browser environments */
+    }
+    try { window.location.href = '/logout'; } catch (e) { /* ignore */ }
+    return;
+  }
+
+  // show/hide login/logout buttons
+  // prefer showing the user's email next to the Logout control (fallback to nickname/name when email missing)
+  const emailStr = localMode ? null : ((status && status.user && status.user.email) ? status.user.email : '');
+  const displayName = localMode ? 'localuser' : ((status && status.user && (status.user.nickname || status.user.name))
+    ? (status.user.nickname || status.user.name)
+    : '');
+
+  if (loginBtn) loginBtn.style.display = isAuth ? 'none' : 'inline-block';
+
+  if (logoutBtn) {
+    // In local mode keep the Logout button visible but disabled.
+    if (localMode) {
+      logoutBtn.style.display = 'inline-block';
+      logoutBtn.disabled = true;
+    } else {
+      logoutBtn.style.display = isAuth ? 'inline-block' : 'none';
+      logoutBtn.disabled = false;
+    }
+
+    // show the email (preferred) or displayName next to the logout action as a separate element
+    const existingUserEl = document.getElementById('currentUserEmail');
+    const labelText = (displayName || '');
+    if (isAuth && labelText) {
+      if (existingUserEl) {
+        existingUserEl.textContent = labelText;
+      } else {
+        const span = document.createElement('span');
+        span.id = 'currentUserEmail';
+        span.style.marginRight = '8px';
+        span.style.fontSize = '14px';
+        span.style.fontWeight = '500';
+        span.textContent = labelText;
+        // insert the span immediately before the logout button
+        if (logoutBtn && logoutBtn.parentNode) logoutBtn.parentNode.insertBefore(span, logoutBtn);
+      }
+      // keep the logout button text minimal — user sees email then [Log Out]
+      logoutBtn.textContent = 'Log Out';
+    } else {
+      if (existingUserEl && existingUserEl.parentNode) existingUserEl.parentNode.removeChild(existingUserEl);
+      logoutBtn.textContent = 'Log out';
+    }
+
+    // show a bold red "Local Mode" label next to the logout button when localMode is active
+    const existingLocalEl = document.getElementById('localModeLabel');
+    if (localMode) {
+      if (!existingLocalEl && logoutBtn && logoutBtn.parentNode) {
+        const lm = document.createElement('span');
+        lm.id = 'localModeLabel';
+        lm.className = 'local-mode';
+        lm.style.marginLeft = '8px';
+        lm.textContent = 'Local Mode';
+        logoutBtn.parentNode.insertBefore(lm, logoutBtn.nextSibling);
+      } else if (existingLocalEl) {
+        existingLocalEl.style.display = 'inline';
+      }
+    } else {
+      if (existingLocalEl && existingLocalEl.parentNode) existingLocalEl.parentNode.removeChild(existingLocalEl);
+    }
+  }
+
+  // show or hide the full-screen splash overlay
+  if (splashEl) {
+    splashEl.style.display = isAuth ? 'none' : 'flex';
+    splashEl.setAttribute('aria-hidden', isAuth ? 'true' : 'false');
+  }
+  // enable/disable editing controls based on auth state
+  const editable = !!isAuth;
+  try { setEditorEnabled(editable && !!state.currentStory); } catch (e) {}
+  if (createStoryBtn) createStoryBtn.disabled = !editable;
+  if (createTileBtn) createTileBtn.disabled = !editable;
+  if (createHighlightBtn) createHighlightBtn.disabled = !editable;
+  if (saveBtn) saveBtn.disabled = !editable;
+  // Publish button enabled only when authenticated and a story is open
+  const publishBtn = document.getElementById('publishBtn');
+
+    // updatePublishButtonState checks whether the Publish button should be enabled.
+    // It enables the button only when:
+    //  - the user is authenticated
+    //  - a story is open
+    //  - there is at least one tile whose content is non-empty
+    async function updatePublishButtonState() {
+      if (!publishBtn) return;
+      if (!isAuth || !state.currentStory) {
+        publishBtn.style.display = isAuth ? 'inline-block' : 'none';
+        publishBtn.disabled = true;
+        return;
+      }
+      publishBtn.style.display = 'inline-block';
+      publishBtn.disabled = true; // assume disabled until we find a non-empty tile
+
+      try {
+        const listRes = await api.listTiles(state.currentStory);
+        if (!listRes || !listRes.ok || !Array.isArray(listRes.tiles) || listRes.tiles.length === 0) {
+          // no tiles -> keep disabled
+          publishBtn.disabled = true;
+          return;
+        }
+        for (const t of listRes.tiles) {
+          try {
+            const tileRes = await api.getTile(state.currentStory, t.id);
+            if (tileRes && tileRes.ok) {
+              const content = (tileRes.content || '').trim();
+              if (content.length > 0) {
+                publishBtn.disabled = false;
+                return;
+              }
+            }
+          } catch (e) {
+            // ignore individual tile errors and continue checking others
+          }
+        }
+        // no non-empty tiles found
+        publishBtn.disabled = true;
+      } catch (e) {
+        // on error be permissive (enable) so users can still try to publish
+        publishBtn.disabled = false;
+      }
+    }
+
+    // Run an initial async check for publishability (do not block applyAuthStatus)
+    try { updatePublishButtonState(); } catch (e) {}
+
+  }
+
+ // wire buttons to server-side /login and /logout
+ if (loginBtn) loginBtn.addEventListener('click', () => { window.location.href = '/login'; });
+ if (logoutBtn) logoutBtn.addEventListener('click', () => { window.location.href = '/logout'; });
+ if (splashLoginBtn) splashLoginBtn.addEventListener('click', () => { window.location.href = '/login'; });
+
+ // Publish button handler: triggers server-side publish but keeps the user in the editor.
+ // The server returns the public URL; we show a non-intrusive notice and do NOT navigate.
+ const publishBtnEl = document.getElementById('publishBtn');
+ if (publishBtnEl) {
+   publishBtnEl.addEventListener('click', async () => {
+     if (!state.currentStory) return alert('Open a story first');
+     const confirmPublish = confirm('Publish the current story? This will overwrite any previously published version.');
+     if (!confirmPublish) return;
+     try {
+       publishBtnEl.disabled = true;
+       publishBtnEl.textContent = 'Publishing...';
+       const resp = await fetch(`/api/stories/${encodeURIComponent(state.currentStory)}/publish`, { method: 'POST' });
+       const body = await resp.json().catch(() => null);
+       if (!body || !body.ok) {
+         const err = body && body.error ? body.error : 'Publish failed';
+         alert(err);
+         return;
+       }
+       // Keep user in the editor: show a confirmation with a clickable link they can open manually.
+       if (body.url) {
+         try {
+           // convert the returned storage URL (/stories/.../published/name.md) into the friendly route /published/:user/:story
+           let pubRoute = body.url;
+           try {
+             const u = body.url;
+             // Expecting something like: /stories/<userId>/<storyId>/published/<name>.md
+             const m = u.match(/^\/stories\/([^\/]+)\/([^\/]+)\/published\/([^\/]+)\.md$/);
+             if (m) {
+               const user = decodeURIComponent(m[1]);
+               const story = decodeURIComponent(m[2]);
+               pubRoute = `/published/${encodeURIComponent(user)}/${encodeURIComponent(story)}`;
+             }
+           } catch (e) {
+             // fallback to body.url if parsing fails
+             pubRoute = body.url;
+           }
+
+           // create a temporary dialog element to show the published link
+           const infoId = 'publishInfo';
+           let infoEl = document.getElementById(infoId);
+           if (!infoEl) {
+             infoEl = document.createElement('div');
+             infoEl.id = infoId;
+             infoEl.style.position = 'fixed';
+             infoEl.style.right = '16px';
+             infoEl.style.bottom = '16px';
+             infoEl.style.background = '#0b6cff';
+             infoEl.style.color = '#fff';
+             infoEl.style.padding = '10px 12px';
+             infoEl.style.borderRadius = '8px';
+             infoEl.style.boxShadow = '0 4px 12px rgba(0,0,0,0.2)';
+             infoEl.style.zIndex = 9999;
+             document.body.appendChild(infoEl);
+           }
+           infoEl.innerHTML = `Published ✓ — <a href="${pubRoute}" target="_blank" style="color:#fff;text-decoration:underline">View story</a>`;
+           // auto-dismiss after 10s
+           setTimeout(() => {
+             try { const el = document.getElementById(infoId); if (el) el.remove(); } catch (e) {}
+           }, 10000);
+         } catch (e) {
+           // fallback: simple alert but still keep user in editor
+           alert('Published. View at: ' + body.url);
+         }
+       } else {
+         alert('Published, but no public URL returned');
+       }
+     } catch (e) {
+       console.error('publish failed', e);
+       alert('Publish failed');
+     } finally {
+       publishBtnEl.disabled = false;
+       publishBtnEl.textContent = 'Publish';
+     }
+   });
+ }
+
+ // fetch auth status on load and apply UI state
+ fetch('/api/auth-status').then(r => r.json()).then(s => {
+   if (s && s.ok) applyAuthStatus(s);
+   else applyAuthStatus({ authenticated: false });
+ }).catch(e => {
+   console.warn('auth-status fetch failed', e);
+   applyAuthStatus({ authenticated: false });
+ });
 
 (function() {
   // ensure #tag pills are rendered any time the preview DOM is updated while viewing the full concatenated tiles.

@@ -20,11 +20,18 @@ RUN mkdir -p ./stories
 # We create the user after installing deps so installs run as root (safer for permissions).
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup && chown -R appuser:appgroup /app
 
+# Install su-exec so we can drop privileges at container start (handles host-mounted volumes)
+RUN apk add --no-cache su-exec
+
+# Copy entrypoint script and make it executable
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 # Expose port
 EXPOSE 3000
 
-# Run the server as non-root user
-USER appuser
+# Use entrypoint: it will chown /app/stories (handles host bind mounts) and then drop to appuser
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
-# Start the server
+# Default command (runs as appuser via su-exec in the entrypoint)
 CMD ["node", "server.js"]

@@ -1161,24 +1161,27 @@ document.addEventListener('keydown', (e) => {
 
           // If we still need to confirm (preview unavailable or there are matches), build a preview message and ask the user.
           if (!shouldProceed) {
-            // Build a user-friendly preview message
-            let msg = `Rename "${item.name}" → "${newTitle}"\n\nWhole-word, case-sensitive matches will be replaced across Tiles and Highlights.\nThis operation is NOT reversible.\n\n`;
+            // Build a concise preview message showing separate counts for tiles vs highlights.
+            let msg = `Rename "${item.name}" → "${newTitle}"\nThis operation is NOT reversible.\n\n`;
             if (!preview || !preview.ok) {
               msg += 'Preview unavailable (server error). Proceed with rename?';
             } else {
-              msg += `Total matches: ${preview.totalMatches || 0}\nFiles with matches: ${Array.isArray(preview.files) ? preview.files.length : 0}\n\nSample occurrences:\n`;
-              // show up to 5 snippets across files
-              let shown = 0;
+              // compute totals per scope
+              let tileMatches = 0;
+              let highlightMatches = 0;
               for (const f of (preview.files || [])) {
-                for (const m of (f.matches || [])) {
-                  msg += `${f.path}:${m.line} — ${m.snippet}\n`;
-                  shown++;
-                  if (shown >= 5) break;
-                }
-                if (shown >= 5) break;
+                try {
+                  if (typeof f.path === 'string' && f.path.startsWith('tiles/')) {
+                    for (const m of (f.matches || [])) tileMatches += (Number(m.count) || 0);
+                  } else if (typeof f.path === 'string' && f.path.startsWith('highlights/')) {
+                    for (const m of (f.matches || [])) highlightMatches += (Number(m.count) || 0);
+                  } else {
+                    // unknown folder — count as tile by default for visibility
+                    for (const m of (f.matches || [])) tileMatches += (Number(m.count) || 0);
+                  }
+                } catch (e) { /* ignore per-file counting errors */ }
               }
-              if (shown === 0) msg += '[no sample matches]\n';
-              msg += '\nProceed with the rename and replace all matches?';
+              msg += `Total Tile matches: ${tileMatches}\nTotal Highlight matches: ${highlightMatches}\n\nProceed with the rename and replace all matches?`;
             }
 
             const ok = confirm(msg);

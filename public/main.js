@@ -734,9 +734,7 @@ currentStoryTitle.addEventListener('click', async () => {
       }
     }
     // render into preview (read-only mode)
-    const html = (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function')
-      ? (marked.parse(combined || ''))
-      : simpleMarkdownToHtml(combined || '');
+    const html = simpleMarkdownToHtml(combined || '');
     preview.innerHTML = html || '<div class="empty-preview">[no tiles]</div>';
     // ensure #tags are rendered as pill elements in the concatenated full view as well
     try { renderTags(preview); } catch (e) { console.warn('renderTags failed on full view', e); }
@@ -1653,9 +1651,7 @@ async function refreshTiles() {
                   console.warn('failed to load tile during full refresh', tt.id, err);
                 }
               }
-              const html2 = (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function')
-                ? marked.parse(combined2 || '')
-                : simpleMarkdownToHtml(combined2 || '');
+              const html2 = simpleMarkdownToHtml(combined2 || '');
               // preserve read-only state
               setEditorEnabled(false);
               preview.innerHTML = html2 || '<div class="empty-preview">[no tiles]</div>';
@@ -1767,37 +1763,8 @@ function renderPreview() {
     // Use marked when available; otherwise fall back to the simple renderer.
     // If marked isn't present, attempt to load it dynamically once and retry rendering.
     let html = '';
-    if (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function') {
-      try {
-        html = marked.parse(md || '');
-      } catch (err) {
-        console.warn('marked.parse failed, falling back to simple renderer', err);
-        html = simpleMarkdownToHtml(md || '');
-      }
-    } else {
-      // Try to load marked dynamically (only once). When it finishes loading we'll re-run renderPreview.
-      if (!window._markedLoading && !window._markedTriedToLoad) {
-        window._markedLoading = true;
-        window._markedTriedToLoad = true;
-        console.log('[debug] marked not found — injecting script to load marked from CDN');
-        const s = document.createElement('script');
-        s.src = 'https://unpkg.com/marked@4.4.12/marked.min.js';
-        s.async = true;
-        s.onload = () => {
-          window._markedLoading = false;
-          console.log('[debug] marked loaded dynamically; re-rendering preview');
-          try { renderPreview(); } catch (e) { console.warn('re-render after marked load failed', e); }
-        };
-        s.onerror = () => {
-          window._markedLoading = false;
-          console.warn('Failed to load marked from CDN; continuing with fallback renderer');
-        };
-        document.head.appendChild(s);
-      } else {
-        console.warn('marked not available, using simpleMarkdownToHtml fallback');
-      }
-      html = simpleMarkdownToHtml(md || '');
-    }
+    // Always use the built-in simpleMarkdownToHtml renderer (we do not load marked).
+    html = simpleMarkdownToHtml(md || '');
     // debug: log the actual HTML we will inject so we can inspect why headings appear as literal text
     try {
       console.log('[debug] rendered HTML preview (first 1000 chars):', (html || '').slice(0, 1000));
@@ -2289,10 +2256,12 @@ preview.addEventListener('contextmenu', (ev) => {
  const splashEl = document.getElementById('splash');
 
 function applyAuthStatus(status) {
-  const isAuth = status && status.authenticated;
+  // localMode takes precedence: when status.localMode is true we simulate an authenticated local user.
+  const localMode = !!(status && status.localMode === true);
+  const isAuth = localMode ? true : (status && status.authenticated);
   // If the user is authenticated but their email is not verified, inform them and log them out.
   // This prevents unverified accounts from using editing features.
-  if (isAuth && status && status.user && status.user.email_verified === false) {
+  if (!localMode && isAuth && status && status.user && status.user.email_verified === false) {
     try {
       // show a clear message and then redirect to /logout to end the session
       alert('Please verify your email address before using this service. You will be logged out.');
@@ -2302,52 +2271,81 @@ function applyAuthStatus(status) {
     try { window.location.href = '/logout'; } catch (e) { /* ignore */ }
     return;
   }
+
   // show/hide login/logout buttons
   // prefer showing the user's email next to the Logout control (fallback to nickname/name when email missing)
-  const emailStr = (status && status.user && status.user.email) ? status.user.email : '';
-  const displayName = (status && status.user && (status.user.nickname || status.user.name))
+  const emailStr = localMode ? null : ((status && status.user && status.user.email) ? status.user.email : '');
+  const displayName = localMode ? 'localuser' : ((status && status.user && (status.user.nickname || status.user.name))
     ? (status.user.nickname || status.user.name)
-    : '';
-   if (loginBtn) loginBtn.style.display = isAuth ? 'none' : 'inline-block';
-   if (logoutBtn) {
-     logoutBtn.style.display = isAuth ? 'inline-block' : 'none';
-     // show the email (preferred) or displayName next to the logout action as a separate element
-     const existingUserEl = document.getElementById('currentUserEmail');
-     const labelText = emailStr || displayName || '';
-     if (isAuth && labelText) {
-       if (existingUserEl) {
-         existingUserEl.textContent = labelText;
-       } else {
-         const span = document.createElement('span');
-         span.id = 'currentUserEmail';
-         span.style.marginRight = '8px';
-         span.style.fontSize = '14px';
-         span.style.fontWeight = '500';
-         span.textContent = labelText;
-         // insert the span immediately before the logout button
-         if (logoutBtn && logoutBtn.parentNode) logoutBtn.parentNode.insertBefore(span, logoutBtn);
-       }
-       // keep the logout button text minimal — user sees email then [Log Out]
-       logoutBtn.textContent = 'Log Out';
-     } else {
-       if (existingUserEl && existingUserEl.parentNode) existingUserEl.parentNode.removeChild(existingUserEl);
-       logoutBtn.textContent = 'Log out';
-     }
-   }
-   // show or hide the full-screen splash overlay
-    if (splashEl) {
-      splashEl.style.display = isAuth ? 'none' : 'flex';
-      splashEl.setAttribute('aria-hidden', isAuth ? 'true' : 'false');
+    : '');
+
+  if (loginBtn) loginBtn.style.display = isAuth ? 'none' : 'inline-block';
+
+  if (logoutBtn) {
+    // In local mode keep the Logout button visible but disabled.
+    if (localMode) {
+      logoutBtn.style.display = 'inline-block';
+      logoutBtn.disabled = true;
+    } else {
+      logoutBtn.style.display = isAuth ? 'inline-block' : 'none';
+      logoutBtn.disabled = false;
     }
-    // enable/disable editing controls based on auth state
-    const editable = !!isAuth;
-    try { setEditorEnabled(editable && !!state.currentStory); } catch (e) {}
-    if (createStoryBtn) createStoryBtn.disabled = !editable;
-    if (createTileBtn) createTileBtn.disabled = !editable;
-    if (createHighlightBtn) createHighlightBtn.disabled = !editable;
-    if (saveBtn) saveBtn.disabled = !editable;
-    // Publish button enabled only when authenticated and a story is open
-    const publishBtn = document.getElementById('publishBtn');
+
+    // show the email (preferred) or displayName next to the logout action as a separate element
+    const existingUserEl = document.getElementById('currentUserEmail');
+    const labelText = (displayName || '');
+    if (isAuth && labelText) {
+      if (existingUserEl) {
+        existingUserEl.textContent = labelText;
+      } else {
+        const span = document.createElement('span');
+        span.id = 'currentUserEmail';
+        span.style.marginRight = '8px';
+        span.style.fontSize = '14px';
+        span.style.fontWeight = '500';
+        span.textContent = labelText;
+        // insert the span immediately before the logout button
+        if (logoutBtn && logoutBtn.parentNode) logoutBtn.parentNode.insertBefore(span, logoutBtn);
+      }
+      // keep the logout button text minimal — user sees email then [Log Out]
+      logoutBtn.textContent = 'Log Out';
+    } else {
+      if (existingUserEl && existingUserEl.parentNode) existingUserEl.parentNode.removeChild(existingUserEl);
+      logoutBtn.textContent = 'Log out';
+    }
+
+    // show a bold red "Local Mode" label next to the logout button when localMode is active
+    const existingLocalEl = document.getElementById('localModeLabel');
+    if (localMode) {
+      if (!existingLocalEl && logoutBtn && logoutBtn.parentNode) {
+        const lm = document.createElement('span');
+        lm.id = 'localModeLabel';
+        lm.className = 'local-mode';
+        lm.style.marginLeft = '8px';
+        lm.textContent = 'Local Mode';
+        logoutBtn.parentNode.insertBefore(lm, logoutBtn.nextSibling);
+      } else if (existingLocalEl) {
+        existingLocalEl.style.display = 'inline';
+      }
+    } else {
+      if (existingLocalEl && existingLocalEl.parentNode) existingLocalEl.parentNode.removeChild(existingLocalEl);
+    }
+  }
+
+  // show or hide the full-screen splash overlay
+  if (splashEl) {
+    splashEl.style.display = isAuth ? 'none' : 'flex';
+    splashEl.setAttribute('aria-hidden', isAuth ? 'true' : 'false');
+  }
+  // enable/disable editing controls based on auth state
+  const editable = !!isAuth;
+  try { setEditorEnabled(editable && !!state.currentStory); } catch (e) {}
+  if (createStoryBtn) createStoryBtn.disabled = !editable;
+  if (createTileBtn) createTileBtn.disabled = !editable;
+  if (createHighlightBtn) createHighlightBtn.disabled = !editable;
+  if (saveBtn) saveBtn.disabled = !editable;
+  // Publish button enabled only when authenticated and a story is open
+  const publishBtn = document.getElementById('publishBtn');
 
     // updatePublishButtonState checks whether the Publish button should be enabled.
     // It enables the button only when:

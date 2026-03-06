@@ -227,3 +227,10 @@ a.entity-hl.no-tags {
   border-radius: 6px;
   text-decoration: underline;
 }
+
+/* Local Mode label (displayed next to the Log Out button in local/dev mode) */
+.local-mode {
+  color: #c00;
+  font-weight: 700;
+  margin-left: 8px;
+}

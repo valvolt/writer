@@ -13,6 +13,13 @@ app.use(express.json());
 
 const STORIES_ROOT = path.join(__dirname, 'stories');
 
+ // Local mode detection: if the .env file is missing OR required Auth0 env vars are absent
+ // we run in a local developer mode where authentication is simulated. This keeps the
+ // existing Auth0 integration intact for production but allows a friction-free local workflow.
+ const _envExists = fs.existsSync(path.join(__dirname, '.env'));
+ const _hasAuthVars = !!(process.env.AUTH0_CLIENT_ID && process.env.AUTH0_ISSUER_BASE_URL);
+ const LOCAL_MODE = (!_envExists) || (!_hasAuthVars);
+
 // ensure stories dir exists
 if (!fs.existsSync(STORIES_ROOT)) {
   fs.mkdirSync(STORIES_ROOT, { recursive: true });
@@ -71,11 +78,28 @@ if (!fs.existsSync(STORIES_ROOT)) {
  };
 
  // attach auth router (adds /login, /logout, /callback)
- app.use(auth(authConfig));
+ // In LOCAL_MODE we skip mounting the express-openid-connect auth router because
+ // it validates required config (clientID, issuer) at init and will throw when
+ // those values are empty. When running locally without a .env we simulate auth
+ // via /api/auth-status instead.
+ if (!LOCAL_MODE) {
+   app.use(auth(authConfig));
+ } else {
+   console.warn('[server] running in LOCAL_MODE: Auth0 integration disabled, simulating auth via /api/auth-status');
+ }
  
  // requireAuth middleware: protect API routes server-side
+ // In LOCAL_MODE we allow requests and stub a minimal req.oidc so downstream code can
+ // rely on req.oidc.user / req.oidc.isAuthenticated() without additional checks.
  function requireAuth(req, res, next) {
    try {
+     if (LOCAL_MODE) {
+       // ensure a minimal req.oidc shape so resolveUserIdFromReq and other helpers work.
+       req.oidc = req.oidc || {};
+       req.oidc.isAuthenticated = () => true;
+       req.oidc.user = req.oidc.user || { name: 'localuser', nickname: 'localuser', email: null, email_verified: true };
+       return next();
+     }
      if (req && req.oidc && req.oidc.isAuthenticated && req.oidc.isAuthenticated()) {
        return next();
      }
@@ -87,21 +111,42 @@ if (!fs.existsSync(STORIES_ROOT)) {
  
  // public endpoint returning auth status for the current browser session
 app.get('/api/auth-status', (req, res) => {
-  const isAuth = !!(req && req.oidc && req.oidc.isAuthenticated && req.oidc.isAuthenticated());
-  const user = isAuth && req.oidc && req.oidc.user ? {
-    name: req.oidc.user.name || null,
-    nickname: req.oidc.user.nickname || null,
-    email: req.oidc.user.email || null,
-    // normalize to boolean (may be undefined)
-    email_verified: !!req.oidc.user.email_verified
-  } : null;
-  res.json({
-    ok: true,
-    authenticated: isAuth,
-    user,
-    loginUrl: '/login',
-    logoutUrl: '/logout'
-  });
+  try {
+    // If running in local mode (no .env), return a simulated authenticated user.
+    if (LOCAL_MODE) {
+      return res.json({
+        ok: true,
+        authenticated: true,
+        localMode: true,
+        user: {
+          name: 'localuser',
+          nickname: 'localuser',
+          email: null,
+          email_verified: true
+        },
+        loginUrl: null,
+        logoutUrl: null
+      });
+    }
+
+    const isAuth = !!(req && req.oidc && req.oidc.isAuthenticated && req.oidc.isAuthenticated());
+    const user = isAuth && req.oidc && req.oidc.user ? {
+      name: req.oidc.user.name || null,
+      nickname: req.oidc.user.nickname || null,
+      email: req.oidc.user.email || null,
+      // normalize to boolean (may be undefined)
+      email_verified: !!req.oidc.user.email_verified
+    } : null;
+    res.json({
+      ok: true,
+      authenticated: isAuth,
+      user,
+      loginUrl: '/login',
+      logoutUrl: '/logout'
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: 'failed to determine auth status' });
+  }
 });
  
  // profile endpoint — requires authentication and returns the OIDC user profile
@@ -268,6 +313,18 @@ function shortHash(email) {
 }
 
 function resolveUserIdFromReq(req) {
+  // In local mode, map all requests to the 'localuser' account.
+  if (LOCAL_MODE) {
+    const nick = 'localuser';
+    const baseCandidate = path.join(STORIES_ROOT, nick);
+    if (!fs.existsSync(baseCandidate)) {
+      fs.mkdirSync(baseCandidate, { recursive: true });
+      const meta = { name: 'localuser', createdAt: new Date().toISOString() };
+      try { fs.writeFileSync(path.join(baseCandidate, 'user.json'), JSON.stringify(meta, null, 2), 'utf8'); } catch (e) {}
+    }
+    return { userId: nick, userPath: baseCandidate };
+  }
+
   if (!req || !req.oidc || !req.oidc.user || !req.oidc.user.email) {
     throw new Error('authenticated user email required');
   }

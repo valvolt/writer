@@ -1147,32 +1147,50 @@ document.addEventListener('keydown', (e) => {
             preview = null;
           }
 
-          // Build a user-friendly preview message
-          let msg = `Rename "${item.name}" → "${newTitle}"\n\nWhole-word, case-sensitive matches will be replaced across Tiles and Highlights.\nThis operation is NOT reversible.\n\n`;
-          if (!preview || !preview.ok) {
-            msg += 'Preview unavailable (server error). Proceed with rename?';
-          } else {
-            msg += `Total matches: ${preview.totalMatches || 0}\nFiles with matches: ${Array.isArray(preview.files) ? preview.files.length : 0}\n\nSample occurrences:\n`;
-            // show up to 5 snippets across files
-            let shown = 0;
-            for (const f of (preview.files || [])) {
-              for (const m of (f.matches || [])) {
-                msg += `${f.path}:${m.line} — ${m.snippet}\n`;
-                shown++;
-                if (shown >= 5) break;
-              }
-              if (shown >= 5) break;
+          // Decide whether to prompt the user. If there are zero occurrences, skip confirmation and just rename.
+          let shouldProceed = false;
+          let propagateChange = true; // default when we do prompt-based rename we propagate replacements
+          if (preview && preview.ok) {
+            const total = Number(preview.totalMatches || 0);
+            if (total === 0) {
+              // nothing to replace in files — perform metadata rename only without prompting
+              shouldProceed = true;
+              propagateChange = false;
             }
-            if (shown === 0) msg += '[no sample matches]\n';
-            msg += '\nProceed with the rename and replace all matches?';
           }
 
-          const ok = confirm(msg);
-          if (!ok) return;
+          // If we still need to confirm (preview unavailable or there are matches), build a preview message and ask the user.
+          if (!shouldProceed) {
+            // Build a user-friendly preview message
+            let msg = `Rename "${item.name}" → "${newTitle}"\n\nWhole-word, case-sensitive matches will be replaced across Tiles and Highlights.\nThis operation is NOT reversible.\n\n`;
+            if (!preview || !preview.ok) {
+              msg += 'Preview unavailable (server error). Proceed with rename?';
+            } else {
+              msg += `Total matches: ${preview.totalMatches || 0}\nFiles with matches: ${Array.isArray(preview.files) ? preview.files.length : 0}\n\nSample occurrences:\n`;
+              // show up to 5 snippets across files
+              let shown = 0;
+              for (const f of (preview.files || [])) {
+                for (const m of (f.matches || [])) {
+                  msg += `${f.path}:${m.line} — ${m.snippet}\n`;
+                  shown++;
+                  if (shown >= 5) break;
+                }
+                if (shown >= 5) break;
+              }
+              if (shown === 0) msg += '[no sample matches]\n';
+              msg += '\nProceed with the rename and replace all matches?';
+            }
+
+            const ok = confirm(msg);
+            if (!ok) return;
+            shouldProceed = true;
+            propagateChange = true;
+          }
 
           // Perform rename + propagation
           const renameUrl = `/api/stories/${encodeURIComponent(state.currentStory)}/highlights/${encodeURIComponent(item.id)}/rename`;
-          const body = { newName: newTitle, propagate: true };
+          // respect propagateChange (when preview showed 0 matches we set propagateChange=false)
+          const body = { newName: newTitle, propagate: !!propagateChange };
           const rRes = await fetch(renameUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1220,12 +1238,12 @@ document.addEventListener('keydown', (e) => {
             console.warn('reload-after-rename failed', e);
           }
 
-          // Show summary of what changed
+          // Show summary of what changed only when there were actual replacements.
+          // If no replacements were needed (metadata-only rename), skip the completion alert.
           const sum = (rBody.summary && typeof rBody.summary === 'object') ? rBody.summary : null;
-          if (sum) {
-            alert(`Rename completed. Replacements: ${sum.totalReplacements}. Files changed: ${sum.filesChanged ? sum.filesChanged.length : 0}.`);
-          } else {
-            alert('Rename completed.');
+          const replacements = sum && typeof sum.totalReplacements === 'number' ? sum.totalReplacements : 0;
+          if (replacements > 0) {
+            alert(`Rename completed. Replacements: ${replacements}. Files changed: ${sum.filesChanged ? sum.filesChanged.length : 0}.`);
           }
         } catch (err) {
           console.error('rename highlight failed', err);

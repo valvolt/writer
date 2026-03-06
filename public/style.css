@@ -85,6 +85,16 @@ header h1{margin:0;font-size:18px}
 .preview{flex:1;min-width:0;overflow:auto;padding:12px;border:1px solid #e6e7ee;border-radius:6px;background:#fff}
 .preview p{margin:0 0 8px 0}
 
+/* Ensure rendered images fit their container and never overflow the preview or other UI panels.
+   This constrains image width to the width of the element they're rendered into (responsive). */
+.preview img,
+.modal-content img,
+.story-content img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
 /* Ensure editor column and preview align bottoms:
    keep both sides as flex children with min-height:0 so they stretch equally.
    Make the textarea flex to fill the editor column (counters sit below it). */

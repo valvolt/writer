@@ -351,7 +351,9 @@ function tagStyleFor(tag) {
 /* Extract tags from text (global utility) — returns unique tag strings without the leading '#' */
 function extractTagsFromText(t) {
   if (!t || typeof t !== 'string') return [];
-  const re = /#([A-Za-z0-9_-]+)/g;
+  // Allow Unicode letters (including accented characters) in tag names.
+  // Use Unicode property escapes with the 'u' flag to match any letter or number.
+  const re = /#([\p{L}\p{N}_-]+)/gu;
   const set = new Set();
   let m;
   while ((m = re.exec(t)) !== null) {
@@ -368,7 +370,8 @@ function renderTags(root) {
     const txt = textNode.nodeValue;
     if (!txt || !txt.trim()) return;
 
-    const re = /#([A-Za-z0-9_-]+)/g;
+    // Accept Unicode letters (including accented characters) in tag names.
+    const re = /#([\p{L}\p{N}_-]+)/gu;
     let m;
     const matches = [];
     while ((m = re.exec(txt)) !== null) {
@@ -547,8 +550,8 @@ function sanitizeForCounting(text) {
   if (!text || typeof text !== 'string') return '';
   // remove markdown images: ![alt](url)
   let s = text.replace(/!\[[^\]]*]\)]*\)/g, ' ');
-  // remove tags like #keyword
-  s = s.replace(/#[A-Za-z0-9_-]+/g, ' ');
+  // remove tags like #keyword (allow accented letters in tags)
+  s = s.replace(/#[\p{L}\p{N}_-]+/gu, ' ');
   // normalize whitespace
   s = s.replace(/\s+/g, ' ').trim();
   return s;
@@ -1026,7 +1029,7 @@ document.addEventListener('keydown', (e) => {
   // extract tags from a block of markdown/text — returns unique tags without the leading '#'
   function extractTagsFromText(t) {
     if (!t || typeof t !== 'string') return [];
-    const re = /#([A-Za-z0-9_-]+)/g;
+    const re = /#([\p{L}\p{N}_-]+)/gu;
     const set = new Set();
     let m;
     while ((m = re.exec(t)) !== null) {

@@ -1183,19 +1183,42 @@ document.addEventListener('keydown', (e) => {
             return alert(rBody && rBody.error ? rBody.error : 'Rename failed');
           }
 
-          // If the user was viewing this highlight, refresh the open editor content and header
-          if (state.currentView && state.currentView.type === 'highlight' && state.currentView.id === item.id) {
-            try {
-              const got = await api.getHighlight(state.currentStory, item.id);
-              if (got && got.ok) {
-                editor.value = got.content || '';
-                currentStoryTitle.textContent = `${state.currentStory} - ${got.title || newTitle}`;
-              }
-            } catch (e) { /* ignore */ }
-          }
-
           // Refresh lists to reflect updated metadata and counts
           await refreshEntityLists();
+
+          // Reload the current editor/view as if the user had clicked the corresponding list item.
+          // This ensures the editor and rendered preview are reloaded from the server and reflect the rename.
+          try {
+            if (state.currentView && state.currentView.type === 'highlight' && state.currentView.id === item.id) {
+              // reuse the existing openEntityInEditor flow to load the highlight afresh
+              openEntityInEditor('highlights', item.id, newTitle);
+            } else if (state.currentView && state.currentView.type === 'tile' && state.currentView.id) {
+              // reload the currently open tile content
+              const tid = state.currentView.id;
+              (async () => {
+                try {
+                  const tgot = await api.getTile(state.currentStory, tid);
+                  if (tgot && tgot.ok) {
+                    editor.value = tgot.content || '';
+                    // keep header showing story - tile title when possible
+                    try {
+                      const listRes = await api.listTiles(state.currentStory);
+                      const tileMeta = (listRes && listRes.ok && Array.isArray(listRes.tiles)) ? (listRes.tiles.find(x => x.id === tid) || {}) : {};
+                      currentStoryTitle.textContent = `${state.currentStory} - ${tileMeta.title || '(untitled)'}`;
+                    } catch (e) {}
+                    setEditorEnabled(true);
+                    editor.focus();
+                    renderPreview();
+                  }
+                } catch (e) { /* ignore */ }
+              })();
+            } else {
+              // otherwise just re-render preview to pick up renamed terms in the displayed text
+              try { renderPreview(); } catch (e) {}
+            }
+          } catch (e) {
+            console.warn('reload-after-rename failed', e);
+          }
 
           // Show summary of what changed
           const sum = (rBody.summary && typeof rBody.summary === 'object') ? rBody.summary : null;

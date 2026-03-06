@@ -626,6 +626,15 @@ app.post('/api/stories/:name/highlights', requireAuth, (req, res) => {
     let meta = [];
     try { meta = fs.existsSync(metaPath) ? JSON.parse(fs.readFileSync(metaPath, 'utf8') || '[]') : []; } catch (e) { meta = []; }
 
+    // Prevent creating a highlight with a title that already exists (case-insensitive, trimmed)
+    const normalizedTitle = String(title || '').trim().toLowerCase();
+    if (normalizedTitle.length > 0) {
+      const dup = meta.find(m => m && m.title && String(m.title).trim().toLowerCase() === normalizedTitle);
+      if (dup) {
+        return res.status(409).json({ ok: false, error: 'another highlight with that name already exists' });
+      }
+    }
+
     let id = safeName(title) || String(Date.now());
     // ensure uniqueness within meta
     let candidate = id;
@@ -704,6 +713,19 @@ app.get('/api/stories/:name/highlights/:id/rename-preview', requireAuth, (req, r
 
     let meta = [];
     try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8') || '[]'); } catch (e) { meta = []; }
+
+    // Prevent duplicate highlight titles on rename (case-insensitive, trimmed).
+    const normalizedNew = String(newName || '').trim().toLowerCase();
+    if (normalizedNew.length > 0) {
+      const duplicate = meta.find(m =>
+        m && m.id && m.title &&
+        m.id !== id && String(m.title).trim().toLowerCase() === normalizedNew
+      );
+      if (duplicate) {
+        return res.status(409).json({ ok: false, error: 'another highlight with that name already exists' });
+      }
+    }
+
     const entry = meta.find(m => m.id === id);
     if (!entry) return res.status(404).json({ ok: false, error: 'highlight not found' });
 

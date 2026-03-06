@@ -1152,6 +1152,27 @@ document.addEventListener('keydown', (e) => {
         const newTitle = prompt('New highlight title', item.name || '');
         if (newTitle === null) return;
 
+        // Client-side duplicate check (UX): prevent renaming to an existing title.
+        // This avoids a needless round-trip when the new name already exists.
+        try {
+          const normalizedNew = String(newTitle || '').trim().toLowerCase();
+          if (normalizedNew.length > 0) {
+            const map = state.highlightsMap || {};
+            for (const existingTitle of Object.keys(map)) {
+              if (String(existingTitle || '').trim().toLowerCase() === normalizedNew) {
+                const existingId = map[existingTitle] && map[existingTitle].id ? map[existingTitle].id : null;
+                if (existingId !== item.id) {
+                  alert(`A highlight named "${newTitle.trim()}" already exists — choose a different name.`);
+                  return;
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // on any unexpected error, fall back to server-side check (do not block rename)
+          console.warn('duplicate-check failed, proceeding to server preview', e);
+        }
+
         try {
           if (!item.id) {
             alert('Rename not supported for legacy highlights');

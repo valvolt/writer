@@ -6,14 +6,18 @@
   "scripts": {
     "start": "node server.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/valvolt/writer.git"
+  },
   "keywords": [
     "story",
     "markdown",
     "writer",
     "local"
   ],
-  "author": "",
-  "license": "MIT",
+  "author": "Cedric Hebert",
+  "license": "Apache-2.0",
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^17.3.1",

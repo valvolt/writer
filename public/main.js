@@ -522,7 +522,15 @@ let inList = false;
       // sanitize heading text: if the captured heading text still starts with stray hashes or spaces
       // (for example due to accidental normalization earlier producing "# # test"), remove those.
       const headingText = (h[2] || '').replace(/^[#\s]+/, '');
-      html += `<h${level}>${escapeHtml(headingText)}</h${level}>`;
+      html += `<h${level}>${escape(headingText)}</h${level}>`;
+      continue;
+    }
+
+    // section separator: three or more asterisks on their own line (e.g. *** or * * *)
+    if (/^\s*(?:\*\s*){3,}\s*$/.test(cleaned)) {
+      if (inList) { html += '</ul>'; inList = false; }
+      // render as a centered decorative separator using Unicode stars
+      html += '<div class="section-sep" aria-hidden="true"><span>✦ ✦ ✦</span></div>';
       continue;
     }
 

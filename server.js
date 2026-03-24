@@ -1299,6 +1299,14 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
       continue;
     }
 
+    // section separator: three or more asterisks on their own line (e.g. *** or * * *)
+    if (/^\s*(?:\*\s*){3,}\s*$/.test(cleaned)) {
+      if (inList) { html += '</ul>'; inList = false; }
+      // render as a centered decorative separator using Unicode stars
+      html += '<div class="section-sep" aria-hidden="true"><span>✦ ✦ ✦</span></div>';
+      continue;
+    }
+
     // horizontal rule: line containing three or more hyphens only (e.g. ---)
     if (/^\s*-{3,}\s*$/.test(cleaned)) {
       if (inList) { html += '</ul>'; inList = false; }

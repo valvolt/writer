@@ -234,3 +234,15 @@ a.entity-hl.no-tags {
   font-weight: 700;
   margin-left: 8px;
 }
+
+/* Centered decorative section separator (rendered for lines like '***' or '* * *') */
+.section-sep {
+  text-align: center;
+  margin: 1.2em 0;
+  color: #666;
+}
+.section-sep span {
+  display: inline-block;
+  letter-spacing: 0.7em;
+  font-size: 1.1em;
+}

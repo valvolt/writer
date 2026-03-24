@@ -200,6 +200,21 @@ app.get('/api/auth-status', (req, res) => {
  
  app.get('/stories/*', (req, res) => {
    try {
+     // Allow unrestricted access in LOCAL_MODE to simplify local development (images and published pages).
+     // In production (LOCAL_MODE === false) the original access checks below still apply.
+     if (LOCAL_MODE) {
+       // req.params[0] contains the wildcard path after /stories/
+       const rel = req.params[0] || '';
+       // normalize and prevent path traversal
+       const normalized = path.normalize(rel).replace(/^(\.\.(\/|\\|$))+/, '');
+       const full = path.join(STORIES_ROOT, normalized);
+       // ensure resolved path is inside STORIES_ROOT
+       const rootResolved = path.resolve(STORIES_ROOT) + path.sep;
+       const fullResolved = path.resolve(full);
+       if (!fullResolved.startsWith(rootResolved)) return res.status(404).send('not found');
+       if (!fs.existsSync(fullResolved)) return res.status(404).send('not found');
+       return res.sendFile(fullResolved);
+     }
      // req.params[0] contains the wildcard path after /stories/
      const rel = req.params[0] || '';
      // normalize and prevent path traversal
@@ -531,7 +546,7 @@ app.post('/api/stories/:name/rename', requireAuth, (req, res) => {
           if (!fs.existsSync(p)) {
             imageList[sub] = [];
           } else {
-            imageList[sub] = fs.readdirSync(p).map(fn => `/stories/${safeName(name)}/images/${sub}/${encodeURIComponent(fn)}`);
+            imageList[sub] = fs.readdirSync(p).map(fn => '/' + ['stories', encodeURIComponent(userId), encodeURIComponent(safeName(name)), 'images', encodeURIComponent(sub), encodeURIComponent(fn)].join('/'));
           }
         }
       }

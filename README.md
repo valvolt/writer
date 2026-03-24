@@ -162,7 +162,7 @@ Besides highlights and and keywords, the following markdown-inspired syntax is s
 | `*italic*` | *italic* |
 | `**bold**` | **bold** |
 | `~~strikethrough~~` | ~~strikethrough~~ |
-| `* Item` | * Item (bullet list) |
+| `* Item` | • Item (bullet list) |
 | `> Quote` | > Quote (blockquote) |
 | `- [ ] Task item` | ◻️ Task item |
 | `- [X] Task item` | ☑️ Task item (checked) |

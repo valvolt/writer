@@ -457,8 +457,8 @@ function parseEntitySectionsArray(raw) {
 function simpleMarkdownToHtml(md) {
   if (!md) return '';
   const lines = md.split(/\r?\n/);
-  let html = '';
-  let inList = false;
+let html = '';
+let inList = false;
 
   function escapeHtml(s) {
     return String(s)
@@ -499,6 +499,7 @@ function simpleMarkdownToHtml(md) {
         return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
       });
       content = content.replace(/`([^`]+)`/g, '<code>$1</code>');
+      content = content.replace(/~~(.+?)~~/g, '<del>$1</del>');
       content = content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
       content = content.replace(/\*(.+?)\*/g, '<em>$1</em>');
 
@@ -517,6 +518,7 @@ function simpleMarkdownToHtml(md) {
 
     // inline code, bold, italic
     content = content.replace(/`([^`]+)`/g, '<code>$1</code>');
+    content = content.replace(/~~(.+?)~~/g, '<del>$1</del>');
     content = content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     content = content.replace(/\*(.+?)\*/g, '<em>$1</em>');
 

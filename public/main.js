@@ -522,7 +522,7 @@ let inList = false;
       // sanitize heading text: if the captured heading text still starts with stray hashes or spaces
       // (for example due to accidental normalization earlier producing "# # test"), remove those.
       const headingText = (h[2] || '').replace(/^[#\s]+/, '');
-      html += `<h${level}>${escape(headingText)}</h${level}>`;
+      html += `<h${level}>${escapeHtml(headingText)}</h${level}>`;
       continue;
     }
 

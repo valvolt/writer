@@ -150,4 +150,25 @@ story\
 
 You will find folder 'my story' under 'stories'. Browse the files there to retrieve your text in md files and your uploaded images.
 
-Clicking 'Delete' in the UI next to 'my story' and confirming will delete all text and uploaded files from your disk.
+Clicking 'Delete' in the UI next to 'my story' and confirming will delete all text and uploaded files from your disk (including its published version).
+
+## Rendering capabilities
+
+Besides highlights and and keywords, the following markdown-inspired syntax is supported:
+
+| Syntax (raw) | Renders as |
+| --- | --- |
+| `# Heading 1` | Heading level 1 (rendered as a heading) |
+| `*italic*` | *italic* |
+| `**bold**` | **bold** |
+| `~~strikethrough~~` | ~~strikethrough~~ |
+| `* Item` | * Item (bullet list) |
+| `> Quote` | > Quote (blockquote) |
+| `- [ ] Task item` | - [ ] Task item |
+| `- [X] Task item` | - [X] Task item (checked) |
+| `![alt text](path/to/image.png)` | ![alt text](Markdown-mark.svg) |
+| `...` | … (ellipsis) |
+| `--` | — (em-dash) |
+| `"quotes"` | “quotes” |
+| `---` | (horizontal line) |
+| `* * *` | ✦ ✦ ✦ (centered line) |

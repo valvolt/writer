@@ -150,7 +150,7 @@ app.get('/api/auth-status', (req, res) => {
 });
  
  // profile endpoint — requires authentication and returns the OIDC user profile
- app.get('/profile', requiresAuth(), (req, res) => {
+ app.get('/profile', requireAuth, (req, res) => {
    try {
      return res.json(req.oidc && req.oidc.user ? req.oidc.user : {});
    } catch (e) {
@@ -1276,8 +1276,9 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
  function simpleMarkdownToHtml(md) {
    if (!md) return '';
    const lines = String(md).split(/\r?\n/);
-   let html = '';
-   let inList = false;
+  let html = '';
+  let inList = false;
+  let inTaskList = false;
 
    function escapeHtml(s) {
      return String(s)
@@ -1310,15 +1311,32 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
     // horizontal rule: line containing three or more hyphens only (e.g. ---)
     if (/^\s*-{3,}\s*$/.test(cleaned)) {
       if (inList) { html += '</ul>'; inList = false; }
+      if (inTaskList) { html += '</ul>'; inTaskList = false; }
       html += '<hr />';
+      continue;
+    }
+
+    // task list: - [ ] or - [x] (also accept "*")
+    const task = cleaned.match(/^\s*[-*]\s+\[([ xX])\]\s+(.*)$/);
+    if (task) {
+      // close any open normal list
+      if (inList) { html += '</ul>'; inList = false; }
+      // open or reuse a task-list container
+      if (!inTaskList) { html += '<ul class="task-list">'; inTaskList = true; }
+      const checked = String(task[1] || '').toLowerCase() === 'x';
+      // label: escape, preserve code spans, then typographic transform
+      let label = escapeHtml(task[2] || '').replace(/`([^`]+)`/g, '<code>$1</code>');
+      try { label = typographicTransform(label); } catch (e) { /* non-fatal */ }
+      html += `<li class="task-item"><input type="checkbox" ${checked ? 'checked' : ''} disabled aria-hidden="true" /> ${label}</li>`;
       continue;
     }
 
     // unordered lists (- or *) 
     const li = cleaned.match(/^\s*[-*]\s+(.*)$/);
-     if (li) {
-       if (!inList) { html += '<ul>'; inList = true; }
-       let content = li[1];
+    if (li) {
+      if (inTaskList) { html += '</ul>'; inTaskList = false; }
+      if (!inList) { html += '<ul>'; inList = true; }
+      let content = li[1];
 
       // escape and handle code spans first
       content = escapeHtml(content)

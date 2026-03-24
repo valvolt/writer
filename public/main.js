@@ -497,6 +497,7 @@ function simpleMarkdownToHtml(md) {
   const lines = md.split(/\r?\n/);
 let html = '';
 let inList = false;
+let inTaskList = false;
 
   function escapeHtml(s) {
     return String(s || '')
@@ -541,9 +542,25 @@ let inList = false;
       continue;
     }
 
+    // task list: - [ ] or - [x] (also accept "*" as marker)
+    const task = cleaned.match(/^\s*[-*]\s+\[([ xX])\]\s+(.*)$/);
+    if (task) {
+      // close any open normal list
+      if (inList) { html += '</ul>'; inList = false; }
+      // open or reuse a task-list container
+      if (!inTaskList) { html += '<ul class="task-list">'; inTaskList = true; }
+      const checked = String(task[1] || '').toLowerCase() === 'x';
+      // label: escape, preserve code spans, then typographic transform
+      let label = escapeHtml(task[2] || '').replace(/`([^`]+)`/g, '<code>$1</code>');
+      try { label = typographicTransform(label); } catch (e) { /* non-fatal */ }
+      html += `<li class="task-item"><input type="checkbox" ${checked ? 'checked' : ''} disabled aria-hidden="true" /> ${label}</li>`;
+      continue;
+    }
+
     // list items
     const li = raw.match(/^\s*\*\s+(.*)/);
     if (li) {
+      if (inTaskList) { html += '</ul>'; inTaskList = false; }
       if (!inList) { html += '<ul>'; inList = true; }
       // escape and protect code spans first
       let content = escapeHtml(li[1]).replace(/`([^`]+)`/g, '<code>$1</code>');

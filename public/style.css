@@ -246,3 +246,22 @@ a.entity-hl.no-tags {
   letter-spacing: 0.7em;
   font-size: 1.1em;
 }
+
+/* Task list styling (render [ ] and - [x] as read-only checkboxes) */
+.task-list {
+  list-style: none;
+  padding-left: 0.5em;
+  margin: 0.5em 0;
+}
+.task-list .task-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  margin: 0.25em 0;
+}
+.task-list .task-item input[type="checkbox"] {
+  width: 1.05em;
+  height:1.05em;
+  accent-color: var(--accent-blue);
+  pointer-events: none;
+}

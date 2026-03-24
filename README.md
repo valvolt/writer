@@ -164,8 +164,8 @@ Besides highlights and and keywords, the following markdown-inspired syntax is s
 | `~~strikethrough~~` | ~~strikethrough~~ |
 | `* Item` | * Item (bullet list) |
 | `> Quote` | > Quote (blockquote) |
-| `- [ ] Task item` | - [ ] Task item |
-| `- [X] Task item` | - [X] Task item (checked) |
+| `- [ ] Task item` | ◻️ Task item |
+| `- [X] Task item` | ☑️ Task item (checked) |
 | `![alt text](path/to/image.png)` | ![alt text](Markdown-mark.svg) |
 | `...` | … (ellipsis) |
 | `--` | — (em-dash) |

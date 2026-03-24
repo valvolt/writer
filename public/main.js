@@ -499,7 +499,7 @@ let html = '';
 let inList = false;
 
   function escapeHtml(s) {
-    return String(s)
+    return String(s || '')
       .replace(/&/g, '&')
       .replace(/</g, '<')
       .replace(/>/g, '>');
@@ -530,17 +530,19 @@ let inList = false;
     const li = raw.match(/^\s*\*\s+(.*)/);
     if (li) {
       if (!inList) { html += '<ul>'; inList = true; }
-      let content = escapeHtml(li[1]);
-
-      // process inline elements inside list item
+      // escape and protect code spans first
+      let content = escapeHtml(li[1]).replace(/`([^`]+)`/g, '<code>$1</code>');
+      // apply typographic transforms (skip code spans)
+      try { content = typographicTransform(content); } catch (e) { /* non-fatal */ }
+      // images: ![alt](url)
       content = content.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
         return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
       });
-      content = content.replace(/`([^`]+)`/g, '<code>$1</code>');
-      content = content.replace(/~~(.+?)~~/g, '<del>$1</del>');
-      content = content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-      content = content.replace(/\*(.+?)\*/g, '<em>$1</em>');
-
+      // inline formatting: bold, italic, strike
+      content = content
+        .replace(/~~(.+?)~~/g, '<del>$1</del>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g, '<em>$1</em>');
       html += `<li>${content}</li>`;
       continue;
     } else {
@@ -548,20 +550,19 @@ let inList = false;
     }
 
     // images on their own line or inline
-    // inline image syntax: ![alt](url)
-    let content = escapeHtml(raw)
-      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
-        return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
-      });
-
-    // inline code, bold, italic
-    content = content.replace(/`([^`]+)`/g, '<code>$1</code>');
-    content = content.replace(/~~(.+?)~~/g, '<del>$1</del>');
-    content = content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    content = content.replace(/\*(.+?)\*/g, '<em>$1</em>');
-
+    // Process in order: escape & protect code spans → typographic transforms → inject images and inline formatting
+    let content = escapeHtml(raw).replace(/`([^`]+)`/g, '<code>$1</code>');
     // apply typographic transforms (skip code spans)
     try { content = typographicTransform(content); } catch (e) { /* non-fatal */ }
+    // inline image syntax: ![alt](url)
+    content = content.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
+      return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
+    });
+    // inline formatting: code already handled, then strike/bold/italic
+    content = content
+      .replace(/~~(.+?)~~/g, '<del>$1</del>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>');
 
     if (content.trim() === '') {
       // blank line — keep as separator

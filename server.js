@@ -257,13 +257,13 @@ function storyPath(name) {
   return path.join(STORIES_ROOT, safeName(name));
 }
 
-// Helper to escape HTML for safe embedding in server-rendered pages
-function escapeHtml(s) {
-  return String(s || '')
-    .replace(/&/g, '&')
-    .replace(/</g, '<')
-    .replace(/>/g, '>');
-}
+ // Helper to escape HTML for safe embedding in server-rendered pages
+ function escapeHtml(s) {
+   return String(s || '')
+     .replace(/&/g, '&')
+     .replace(/</g, '<')
+     .replace(/>/g, '>');
+ }
 
 // Typographic transforms helper (server-side):
 // - "..." -> …
@@ -1305,43 +1305,44 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
        if (!inList) { html += '<ul>'; inList = true; }
        let content = li[1];
 
-       // images: ![alt](url)
-       content = content.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
-         return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
-       });
-       // inline code, bold, italic
-       content = escapeHtml(content)
-         .replace(/`([^`]+)`/g, '<code>$1</code>')
-         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-         .replace(/\*(.+?)\*/g, '<em>$1</em>');
-       // apply typographic transforms (skip code spans)
-       try { content = typographicTransform(content); } catch (e) { /* non-fatal */ }
-       html += `<li>${content}</li>`;
-       continue;
+      // escape and handle code spans first
+      content = escapeHtml(content)
+        .replace(/`([^`]+)`/g, '<code>$1</code>');
+      // apply typographic transforms (skip code spans)
+      try { content = typographicTransform(content); } catch (e) { /* non-fatal */ }
+      // images: ![alt](url)
+      content = content.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
+        return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
+      });
+      // inline bold, italic
+      content = content
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g, '<em>$1</em>');
+      html += `<li>${content}</li>`;
+      continue;
      } else {
        if (inList) { html += '</ul>'; inList = false }
      }
 
-     // process inline elements for paragraphs
-     let paragraph = escapeHtml(raw)
-       .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
-         return `< src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
-       })
-       .replace(/`([^`]+)`/g, '<code>$1</code>')
-       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-       .replace(/\*(.+?)\*/g, '<em>$1</em>');
+    // process inline elements for paragraphs
+    let paragraph = escapeHtml(raw)
+      .replace(/`([^`]+)`/g, '<code>$1</code>');
+    // apply typographic transforms (skip code spans)
+    try { paragraph = typographicTransform(paragraph); } catch (e) { /* non-fatal */ }
+    paragraph = paragraph
+      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
+        return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
+      })
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>');
  
-     // apply typographic transforms (skip code spans)
-     try { paragraph = typographicTransform(paragraph); } catch (e) { /* non-fatal */ }
- 
-     if (paragraph.trim() === '') {
-       // blank line -> paragraph separator (emit nothing)
-       html += '';
-     } else {
-       html += `<p>${paragraph}</p>`;
-     }
-   }
-   }
+    if (paragraph.trim() === '') {
+      // blank line -> paragraph separator (emit nothing)
+      html += '';
+    } else {
+      html += `<p>${paragraph}</p>`;
+    }
+    }
 
    if (inList) html += '</ul>';
    return html;

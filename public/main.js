@@ -495,9 +495,9 @@ function parseEntitySectionsArray(raw) {
 function simpleMarkdownToHtml(md) {
   if (!md) return '';
   const lines = md.split(/\r?\n/);
-let html = '';
-let inList = false;
-let inTaskList = false;
+  let html = '';
+  let inList = false;
+  let inTaskList = false;
 
   function escapeHtml(s) {
     return String(s || '')
@@ -506,22 +506,33 @@ let inTaskList = false;
       .replace(/>/g, '>');
   }
 
-  for (let line of lines) {
-    const raw = line;
-    line = escapeHtml(line);
+  // iterate by index so we can group consecutive lines (useful for blockquotes)
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const cleaned = raw.replace(/^[\uFEFF\u200B]+/, '');
+
+    // blockquote: collect consecutive lines starting with '>'
+    if (/^\s*>\s?/.test(cleaned)) {
+      if (inList) { html += '</ul>'; inList = false; }
+      const bqLines = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i].replace(/^[\uFEFF\u200B]+/, ''))) {
+        // strip the first '>' and one optional following space (also remove any leading spaces)
+        bqLines.push(lines[i].replace(/^\s*>\s?/, ''));
+        i++;
+      }
+      i--; // step back because the for loop will increment
+      // render inner content recursively so headings/lists/inline are supported inside blockquote
+      const inner = simpleMarkdownToHtml(bqLines.join('\n'));
+      html += `<blockquote>${inner}</blockquote>`;
+      continue;
+    }
 
     // headings
-    // strip possible BOM/zero-width characters that sometimes sneak into files,
-    // then match 1-6 leading '#' followed by at least one space and the heading text.
-    const cleaned = raw.replace(/^[\uFEFF\u200B]+/, '');
     const h = cleaned.match(/^(#{1,6})\s+(.*)$/);
     if (h) {
-      // debug log to help diagnose malformed heading inputs (will show exact raw line)
       try { console.log('[debug] simpleMarkdownToHtml: heading match ->', JSON.stringify(cleaned), 'level=', h[1].length, 'text=', JSON.stringify(h[2])); } catch (e) {}
       if (inList) { html += '</ul>'; inList = false; }
       const level = h[1].length;
-      // sanitize heading text: if the captured heading text still starts with stray hashes or spaces
-      // (for example due to accidental normalization earlier producing "# # test"), remove those.
       const headingText = (h[2] || '').replace(/^[#\s]+/, '');
       html += `<h${level}>${escapeHtml(headingText)}</h${level}>`;
       continue;
@@ -530,7 +541,6 @@ let inTaskList = false;
     // section separator: three or more asterisks on their own line (e.g. *** or * * *)
     if (/^\s*(?:\*\s*){3,}\s*$/.test(cleaned)) {
       if (inList) { html += '</ul>'; inList = false; }
-      // render as a centered decorative separator using Unicode stars
       html += '<div class="section-sep" aria-hidden="true"><span>✦ ✦ ✦</span></div>';
       continue;
     }
@@ -545,32 +555,25 @@ let inTaskList = false;
     // task list: - [ ] or - [x] (also accept "*" as marker)
     const task = cleaned.match(/^\s*[-*]\s+\[([ xX])\]\s+(.*)$/);
     if (task) {
-      // close any open normal list
       if (inList) { html += '</ul>'; inList = false; }
-      // open or reuse a task-list container
       if (!inTaskList) { html += '<ul class="task-list">'; inTaskList = true; }
       const checked = String(task[1] || '').toLowerCase() === 'x';
-      // label: escape, preserve code spans, then typographic transform
       let label = escapeHtml(task[2] || '').replace(/`([^`]+)`/g, '<code>$1</code>');
-      try { label = typographicTransform(label); } catch (e) { /* non-fatal */ }
+      try { label = typographicTransform(label); } catch (e) {}
       html += `<li class="task-item"><input type="checkbox" ${checked ? 'checked' : ''} disabled aria-hidden="true" /> ${label}</li>`;
       continue;
     }
 
-    // list items
+    // list items (asterisk marker)
     const li = raw.match(/^\s*\*\s+(.*)/);
     if (li) {
       if (inTaskList) { html += '</ul>'; inTaskList = false; }
       if (!inList) { html += '<ul>'; inList = true; }
-      // escape and protect code spans first
       let content = escapeHtml(li[1]).replace(/`([^`]+)`/g, '<code>$1</code>');
-      // apply typographic transforms (skip code spans)
-      try { content = typographicTransform(content); } catch (e) { /* non-fatal */ }
-      // images: ![alt](url)
+      try { content = typographicTransform(content); } catch (e) {}
       content = content.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
         return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
       });
-      // inline formatting: bold, italic, strike
       content = content
         .replace(/~~(.+?)~~/g, '<del>$1</del>')
         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
@@ -578,26 +581,21 @@ let inTaskList = false;
       html += `<li>${content}</li>`;
       continue;
     } else {
-      if (inList) { html += '</ul>'; inList = false }
+      if (inList) { html += '</ul>'; inList = false; }
     }
 
-    // images on their own line or inline
-    // Process in order: escape & protect code spans → typographic transforms → inject images and inline formatting
+    // images on their own line or inline / inline formatting for paragraphs
     let content = escapeHtml(raw).replace(/`([^`]+)`/g, '<code>$1</code>');
-    // apply typographic transforms (skip code spans)
-    try { content = typographicTransform(content); } catch (e) { /* non-fatal */ }
-    // inline image syntax: ![alt](url)
+    try { content = typographicTransform(content); } catch (e) {}
     content = content.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
       return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
     });
-    // inline formatting: code already handled, then strike/bold/italic
     content = content
       .replace(/~~(.+?)~~/g, '<del>$1</del>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/\*(.+?)\*/g, '<em>$1</em>');
 
     if (content.trim() === '') {
-      // blank line — keep as separator
       html += '';
     } else {
       html += `<p>${content}</p>`;

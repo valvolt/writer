@@ -265,3 +265,14 @@ a.entity-hl.no-tags {
   accent-color: var(--accent-blue);
   pointer-events: none;
 }
+
+/* Blockquote styling for both preview and published story pages */
+.preview blockquote,
+.story-content blockquote {
+  margin: 1em 0;
+  padding: 0.6em 1em;
+  border-left: 4px solid #d0d0d0;
+  background: #fafafa;
+  color: #222;
+  border-radius: 4px;
+}

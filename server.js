@@ -1287,95 +1287,103 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
        .replace(/>/g, '>');
    }
 
-   for (let raw of lines) {
-     // preserve original raw line for heading detection and some heuristics
+   // iterate lines by index so we can group consecutive lines (useful for blockquotes)
+   for (let i = 0; i < lines.length; i++) {
+     const raw = lines[i];
      const cleaned = raw.replace(/^[\uFEFF\u200B]+/, '');
-     // headings: 1-6 hashes followed by a space
-     const h = cleaned.match(/^(#{1,6})\s+(.*)$/);
-    if (h) {
-      if (inList) { html += '</ul>'; inList = false; }
-      const level = h[1].length;
-      const headingText = escapeHtml(h[2].replace(/^[#\s]+/, ''));
-      html += `<h${level}>${headingText}</h${level}>`;
-      continue;
-    }
 
-    // section separator: three or more asterisks on their own line (e.g. *** or * * *)
-    if (/^\s*(?:\*\s*){3,}\s*$/.test(cleaned)) {
-      if (inList) { html += '</ul>'; inList = false; }
-      // render as a centered decorative separator using Unicode stars
-      html += '<div class="section-sep" aria-hidden="true"><span>✦ ✦ ✦</span></div>';
-      continue;
-    }
-
-    // horizontal rule: line containing three or more hyphens only (e.g. ---)
-    if (/^\s*-{3,}\s*$/.test(cleaned)) {
-      if (inList) { html += '</ul>'; inList = false; }
-      if (inTaskList) { html += '</ul>'; inTaskList = false; }
-      html += '<hr />';
-      continue;
-    }
-
-    // task list: - [ ] or - [x] (also accept "*")
-    const task = cleaned.match(/^\s*[-*]\s+\[([ xX])\]\s+(.*)$/);
-    if (task) {
-      // close any open normal list
-      if (inList) { html += '</ul>'; inList = false; }
-      // open or reuse a task-list container
-      if (!inTaskList) { html += '<ul class="task-list">'; inTaskList = true; }
-      const checked = String(task[1] || '').toLowerCase() === 'x';
-      // label: escape, preserve code spans, then typographic transform
-      let label = escapeHtml(task[2] || '').replace(/`([^`]+)`/g, '<code>$1</code>');
-      try { label = typographicTransform(label); } catch (e) { /* non-fatal */ }
-      html += `<li class="task-item"><input type="checkbox" ${checked ? 'checked' : ''} disabled aria-hidden="true" /> ${label}</li>`;
-      continue;
-    }
-
-    // unordered lists (- or *) 
-    const li = cleaned.match(/^\s*[-*]\s+(.*)$/);
-    if (li) {
-      if (inTaskList) { html += '</ul>'; inTaskList = false; }
-      if (!inList) { html += '<ul>'; inList = true; }
-      let content = li[1];
-
-      // escape and handle code spans first
-      content = escapeHtml(content)
-        .replace(/`([^`]+)`/g, '<code>$1</code>');
-      // apply typographic transforms (skip code spans)
-      try { content = typographicTransform(content); } catch (e) { /* non-fatal */ }
-      // images: ![alt](url)
-      content = content.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
-        return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
-      });
-      // inline bold, italic
-      content = content
-        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/\*(.+?)\*/g, '<em>$1</em>');
-      html += `<li>${content}</li>`;
-      continue;
-     } else {
-       if (inList) { html += '</ul>'; inList = false }
+     // blockquote: collect consecutive lines starting with '>'
+     if (/^\s*>\s?/.test(cleaned)) {
+       if (inList) { html += '</ul>'; inList = false; }
+       const bqLines = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i].replace(/^[\uFEFF\u200B]+/, ''))) {
+        // strip the first '>' and one optional following space (also remove any spaces)
+        bqLines.push(lines[i].replace(/^\s*>\s?/, ''));
+        i++;
+      }
+       i--; // adjust because the for loop will increment
+       const inner = simpleMarkdownToHtml(bqLines.join('\n'));
+       html += `<blockquote>${inner}</blockquote>`;
+       continue;
      }
 
-    // process inline elements for paragraphs
-    let paragraph = escapeHtml(raw)
-      .replace(/`([^`]+)`/g, '<code>$1</code>');
-    // apply typographic transforms (skip code spans)
-    try { paragraph = typographicTransform(paragraph); } catch (e) { /* non-fatal */ }
-    paragraph = paragraph
-      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
-        return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
-      })
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*(.+?)\*/g, '<em>$1</em>');
- 
-    if (paragraph.trim() === '') {
-      // blank line -> paragraph separator (emit nothing)
-      html += '';
-    } else {
-      html += `<p>${paragraph}</p>`;
-    }
-    }
+     // headings: 1-6 hashes followed by a space
+     const h = cleaned.match(/^(#{1,6})\s+(.*)$/);
+     if (h) {
+       if (inList) { html += '</ul>'; inList = false; }
+       const level = h[1].length;
+       const headingText = escapeHtml(h[2].replace(/^[#\s]+/, ''));
+       html += `<h${level}>${headingText}</h${level}>`;
+       continue;
+     }
+
+     // section separator: three or more asterisks on their own line (e.g. *** or * * *)
+     if (/^\s*(?:\*\s*){3,}\s*$/.test(cleaned)) {
+       if (inList) { html += '</ul>'; inList = false; }
+       html += '<div class="section-sep" aria-hidden="true"><span>✦ ✦ ✦</span></div>';
+       continue;
+     }
+
+     // horizontal rule: line containing three or more hyphens only (e.g. ---)
+     if (/^\s*-{3,}\s*$/.test(cleaned)) {
+       if (inList) { html += '</ul>'; inList = false; }
+       if (inTaskList) { html += '</ul>'; inTaskList = false; }
+       html += '<hr />';
+       continue;
+     }
+
+     // task list: - [ ] or - [x] (also accept "*")
+     const task = cleaned.match(/^\s*[-*]\s+\[([ xX])\]\s+(.*)$/);
+     if (task) {
+       if (inList) { html += '</ul>'; inList = false; }
+       if (!inTaskList) { html += '<ul class="task-list">'; inTaskList = true; }
+       const checked = String(task[1] || '').toLowerCase() === 'x';
+       let label = escapeHtml(task[2] || '').replace(/`([^`]+)`/g, '<code>$1</code>');
+       try { label = typographicTransform(label); } catch (e) { /* non-fatal */ }
+       html += `<li class="task-item"><input type="checkbox" ${checked ? 'checked' : ''} disabled aria-hidden="true" /> ${label}</li>`;
+       continue;
+     }
+
+     // unordered lists (- or *) 
+     const li = cleaned.match(/^\s*[-*]\s+(.*)$/);
+     if (li) {
+       if (inTaskList) { html += '</ul>'; inTaskList = false; }
+       if (!inList) { html += '<ul>'; inList = true; }
+       let content = li[1];
+
+       // escape and handle code spans first
+       content = escapeHtml(content)
+         .replace(/`([^`]+)`/g, '<code>$1</code>');
+       try { content = typographicTransform(content); } catch (e) { /* non-fatal */ }
+       content = content.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
+         return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
+       });
+       content = content
+         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+         .replace(/\*(.+?)\*/g, '<em>$1</em>');
+       html += `<li>${content}</li>`;
+       continue;
+     } else {
+       if (inList) { html += '</ul>'; inList = false; }
+     }
+
+     // process inline elements for paragraphs
+     let paragraph = escapeHtml(raw)
+       .replace(/`([^`]+)`/g, '<code>$1</code>');
+     try { paragraph = typographicTransform(paragraph); } catch (e) { /* non-fatal */ }
+     paragraph = paragraph
+       .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
+         return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
+       })
+       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+       .replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+     if (paragraph.trim() === '') {
+       html += '';
+     } else {
+       html += `<p>${paragraph}</p>`;
+     }
+   }
 
    if (inList) html += '</ul>';
    return html;

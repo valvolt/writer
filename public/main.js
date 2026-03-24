@@ -2032,7 +2032,27 @@ function onEntityHover(ev) {
     }
   }
   if (!entry) entry = { title: name, desc: '' };
-  const images = state.storyData.images && state.storyData.images[type] ? state.storyData.images[type] : [];
+  let images = [];
+  if (state.storyData && state.storyData.images) {
+    // new server shape: images is a flat array
+    if (Array.isArray(state.storyData.images)) {
+      images = state.storyData.images;
+    } else if (state.storyData.images[type]) {
+      // legacy shape: images.{type} -> array
+      images = state.storyData.images[type];
+    } else {
+      // fallback: flatten any arrays found on the object (preserve existing URLs)
+      try {
+        images = Object.keys(state.storyData.images).reduce((acc, k) => {
+          const v = state.storyData.images[k];
+          if (Array.isArray(v)) return acc.concat(v);
+          return acc;
+        }, []);
+      } catch (e) {
+        images = [];
+      }
+    }
+  }
 
   // choose image to show in tooltip:
   // - prefer an image URL embedded in the entity description markdown (![alt](url))

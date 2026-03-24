@@ -577,16 +577,11 @@ app.post('/api/stories/:name/rename', requireAuth, (req, res) => {
       }
 
       const imagesDir = path.join(base, 'images');
-      const imageList = {};
+      let imageList = [];
       if (fs.existsSync(imagesDir)) {
-        for (const sub of ['highlights']) {
-          const p = path.join(imagesDir, sub);
-          if (!fs.existsSync(p)) {
-            imageList[sub] = [];
-          } else {
-            imageList[sub] = fs.readdirSync(p).map(fn => '/' + ['stories', encodeURIComponent(userId), encodeURIComponent(safeName(name)), 'images', encodeURIComponent(sub), encodeURIComponent(fn)].join('/'));
-          }
-        }
+        imageList = fs.readdirSync(imagesDir, { withFileTypes: true })
+          .filter(d => d.isFile())
+          .map(d => '/' + ['stories', encodeURIComponent(userId), encodeURIComponent(safeName(name)), 'images', encodeURIComponent(d.name)].join('/'));
       }
       res.json({ ok: true, name, highlights, images: imageList });
     } catch (err) {
@@ -1122,7 +1117,7 @@ const storage = multer.diskStorage({
     const t = allowed.includes(type) ? type : 'highlights';
     try {
       const { userId, base } = resolveBaseFlexible(req, story);
-      const dest = path.join(base, 'images', t);
+      const dest = path.join(base, 'images');
       fs.mkdirSync(dest, { recursive: true });
       cb(null, dest);
     } catch (e) {
@@ -1214,14 +1209,13 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
      // copy story images to published/images
      const imagesDir = path.join(base, 'images');
      if (fs.existsSync(imagesDir)) {
-       const subs = fs.readdirSync(imagesDir, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name);
-       for (const sub of subs) {
-         const src = path.join(imagesDir, sub);
-         const destSub = path.join(publishedImages, sub);
-         if (!fs.existsSync(destSub)) fs.mkdirSync(destSub, { recursive: true });
-         for (const f of fs.readdirSync(src)) {
-           try { fs.copyFileSync(path.join(src, f), path.join(destSub, f)); } catch (e) {}
-         }
+       for (const f of fs.readdirSync(imagesDir)) {
+         const src = path.join(imagesDir, f);
+         try {
+           if (fs.statSync(src).isFile()) {
+             fs.copyFileSync(src, path.join(publishedImages, f));
+           }
+         } catch (e) { /* ignore individual file copy errors */ }
        }
      }
      // write aggregated markdown (overwrite)

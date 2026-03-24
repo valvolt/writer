@@ -526,6 +526,13 @@ let inList = false;
       continue;
     }
 
+    // horizontal rule: line containing three or more hyphens only (e.g. ---)
+    if (/^\s*-{3,}\s*$/.test(cleaned)) {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += '<hr />';
+      continue;
+    }
+
     // list items
     const li = raw.match(/^\s*\*\s+(.*)/);
     if (li) {

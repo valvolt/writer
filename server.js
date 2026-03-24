@@ -1291,16 +1291,23 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
      const cleaned = raw.replace(/^[\uFEFF\u200B]+/, '');
      // headings: 1-6 hashes followed by a space
      const h = cleaned.match(/^(#{1,6})\s+(.*)$/);
-     if (h) {
-       if (inList) { html += '</ul>'; inList = false; }
-       const level = h[1].length;
-       const headingText = escapeHtml(h[2].replace(/^[#\s]+/, ''));
-       html += `<h${level}>${headingText}</h${level}>`;
-       continue;
-     }
+    if (h) {
+      if (inList) { html += '</ul>'; inList = false; }
+      const level = h[1].length;
+      const headingText = escapeHtml(h[2].replace(/^[#\s]+/, ''));
+      html += `<h${level}>${headingText}</h${level}>`;
+      continue;
+    }
 
-     // unordered lists (- or *) 
-     const li = cleaned.match(/^\s*[-*]\s+(.*)$/);
+    // horizontal rule: line containing three or more hyphens only (e.g. ---)
+    if (/^\s*-{3,}\s*$/.test(cleaned)) {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += '<hr />';
+      continue;
+    }
+
+    // unordered lists (- or *) 
+    const li = cleaned.match(/^\s*[-*]\s+(.*)$/);
      if (li) {
        if (!inList) { html += '<ul>'; inList = true; }
        let content = li[1];

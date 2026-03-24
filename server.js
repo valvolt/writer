@@ -265,6 +265,44 @@ function escapeHtml(s) {
     .replace(/>/g, '>');
 }
 
+// Typographic transforms helper (server-side):
+// - "..." -> …
+// - "--"  -> —
+// - straight double quotes " -> smart quotes “ ” (simple alternating heuristic)
+// Skips <code>...</code> spans by temporarily replacing them with placeholders.
+function typographicTransform(s) {
+  if (!s || typeof s !== 'string') return s;
+  const placeholders = [];
+  s = s.replace(/<code>[\s\S]*?<\/code>/g, (m) => {
+    const key = `__CODE_PLACEHOLDER_${placeholders.length}__`;
+    placeholders.push(m);
+    return key;
+  });
+
+  // ellipses
+  s = s.replace(/\.{3}/g, '…');
+  // em-dash
+  s = s.replace(/--/g, '—');
+
+  // smart double quotes (toggle heuristic)
+  let out = '';
+  let open = true;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '"') {
+      out += open ? '“' : '”';
+      open = !open;
+    } else {
+      out += ch;
+    }
+  }
+  s = out;
+
+  // restore code placeholders
+  s = s.replace(/__CODE_PLACEHOLDER_(\d+)__/g, (_m, idx) => placeholders[Number(idx)] || '');
+  return s;
+}
+
 function ensureStoryStructure(name) {
   const base = storyPath(name);
   if (!fs.existsSync(base)) {
@@ -1276,27 +1314,33 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
          .replace(/`([^`]+)`/g, '<code>$1</code>')
          .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
          .replace(/\*(.+?)\*/g, '<em>$1</em>');
+       // apply typographic transforms (skip code spans)
+       try { content = typographicTransform(content); } catch (e) { /* non-fatal */ }
        html += `<li>${content}</li>`;
        continue;
      } else {
-       if (inList) { html += '</ul>'; inList = false; }
+       if (inList) { html += '</ul>'; inList = false }
      }
 
      // process inline elements for paragraphs
      let paragraph = escapeHtml(raw)
        .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
-         return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
+         return `< src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
        })
        .replace(/`([^`]+)`/g, '<code>$1</code>')
        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
        .replace(/\*(.+?)\*/g, '<em>$1</em>');
-
+ 
+     // apply typographic transforms (skip code spans)
+     try { paragraph = typographicTransform(paragraph); } catch (e) { /* non-fatal */ }
+ 
      if (paragraph.trim() === '') {
        // blank line -> paragraph separator (emit nothing)
        html += '';
      } else {
        html += `<p>${paragraph}</p>`;
      }
+   }
    }
 
    if (inList) html += '</ul>';

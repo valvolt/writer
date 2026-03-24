@@ -296,6 +296,44 @@ function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Typographic transforms helper (used by client preview):
+// - "..." -> …
+// - "--"  -> —
+// - straight double quotes " -> smart quotes “ ” (simple alternating heuristic)
+// Skips code spans by temporarily replacing <code>...</code> with placeholders.
+function typographicTransform(s) {
+  if (!s || typeof s !== 'string') return s;
+  const placeholders = [];
+  s = s.replace(/<code>[\s\S]*?<\/code>/g, (m) => {
+    const key = `__CODE_PLACEHOLDER_${placeholders.length}__`;
+    placeholders.push(m);
+    return key;
+  });
+
+  // ellipses
+  s = s.replace(/\.{3}/g, '…');
+  // em-dash
+  s = s.replace(/--/g, '—');
+
+  // smart double quotes (simple toggle heuristic)
+  let out = '';
+  let open = true;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '"') {
+      out += open ? '“' : '”';
+      open = !open;
+    } else {
+      out += ch;
+    }
+  }
+  s = out;
+
+  // restore code placeholders
+  s = s.replace(/__CODE_PLACEHOLDER_(\d+)__/g, (_m, idx) => placeholders[Number(idx)] || '');
+  return s;
+}
+
 /* --- tag rendering helpers ---
    Generate a deterministic pastel background color and a darker text color
    based on the tag string so each tag gets the same color every time. */
@@ -521,6 +559,9 @@ let inList = false;
     content = content.replace(/~~(.+?)~~/g, '<del>$1</del>');
     content = content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     content = content.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+    // apply typographic transforms (skip code spans)
+    try { content = typographicTransform(content); } catch (e) { /* non-fatal */ }
 
     if (content.trim() === '') {
       // blank line — keep as separator

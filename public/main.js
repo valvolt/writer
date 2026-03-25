@@ -496,8 +496,10 @@ function simpleMarkdownToHtml(md) {
   if (!md) return '';
   const lines = md.split(/\r?\n/);
   let html = '';
-  let inList = false;
-  let inTaskList = false;
+  // list stack for nested lists: each entry is 'normal' or 'task'
+  const listStack = [];
+  // parallel stack tracking whether the last <li> at each list level is still open
+  const liOpenStack = [];
 
   function escapeHtml(s) {
     return String(s || '')
@@ -513,7 +515,7 @@ function simpleMarkdownToHtml(md) {
 
     // blockquote: collect consecutive lines starting with '>'
     if (/^\s*>\s?/.test(cleaned)) {
-      if (inList) { html += '</ul>'; inList = false; }
+      while (listStack.length > 0) { html += '</ul>'; listStack.pop(); }
       const bqLines = [];
       while (i < lines.length && /^\s*>\s?/.test(lines[i].replace(/^[\uFEFF\u200B]+/, ''))) {
         // strip the first '>' and one optional following space (also remove any leading spaces)
@@ -531,7 +533,7 @@ function simpleMarkdownToHtml(md) {
     const h = cleaned.match(/^(#{1,6})\s+(.*)$/);
     if (h) {
       try { console.log('[debug] simpleMarkdownToHtml: heading match ->', JSON.stringify(cleaned), 'level=', h[1].length, 'text=', JSON.stringify(h[2])); } catch (e) {}
-      if (inList) { html += '</ul>'; inList = false; }
+      while (listStack.length > 0) { html += '</ul>'; listStack.pop(); }
       const level = h[1].length;
       const headingText = (h[2] || '').replace(/^[#\s]+/, '');
       html += `<h${level}>${escapeHtml(headingText)}</h${level}>`;
@@ -540,36 +542,31 @@ function simpleMarkdownToHtml(md) {
 
     // section separator: three or more asterisks on their own line (e.g. *** or * * *)
     if (/^\s*(?:\*\s*){3,}\s*$/.test(cleaned)) {
-      if (inList) { html += '</ul>'; inList = false; }
+      while (listStack.length > 0) { html += '</ul>'; listStack.pop(); }
       html += '<div class="section-sep" aria-hidden="true"><span>✦ ✦ ✦</span></div>';
       continue;
     }
 
     // horizontal rule: line containing three or more hyphens only (e.g. ---)
     if (/^\s*-{3,}\s*$/.test(cleaned)) {
-      if (inList) { html += '</ul>'; inList = false; }
+      while (listStack.length > 0) { html += '</ul>'; listStack.pop(); }
       html += '<hr />';
       continue;
     }
 
-    // task list: - [ ] or - [x] (also accept "*" as marker)
-    const task = cleaned.match(/^\s*[-*]\s+\[([ xX])\]\s+(.*)$/);
-    if (task) {
-      if (inList) { html += '</ul>'; inList = false; }
-      if (!inTaskList) { html += '<ul class="task-list">'; inTaskList = true; }
-      const checked = String(task[1] || '').toLowerCase() === 'x';
-      let label = escapeHtml(task[2] || '').replace(/`([^`]+)`/g, '<code>$1</code>');
-      try { label = typographicTransform(label); } catch (e) {}
-      html += `<li class="task-item"><input type="checkbox" ${checked ? 'checked' : ''} disabled aria-hidden="true" /> ${label}</li>`;
-      continue;
-    }
+    // nested lists: support two-space-per-level indentation for nesting.
+    // We'll keep <li> elements open while nesting so nested <ul> are rendered INSIDE the parent <li>.
+    // Matches either task items ("- [ ] ..." or "* [x] ...") or normal unordered items ("* ...").
+    const task = cleaned.match(/^(\s*)[-*]\s+\[([ xX])\]\s+(.*)$/);
+    const ul = raw.match(/^(\s*)\*\s+(.*)$/);
+    if (task || ul) {
+      const leading = (task ? task[1] : (ul ? ul[1] : '')) || '';
+      const indent = Math.floor(leading.length / 2); // two spaces per nesting level
+      const isTask = !!task;
+      const contentRaw = isTask ? task[3] : ul[2];
 
-    // list items (asterisk marker)
-    const li = raw.match(/^\s*\*\s+(.*)/);
-    if (li) {
-      if (inTaskList) { html += '</ul>'; inTaskList = false; }
-      if (!inList) { html += '<ul>'; inList = true; }
-      let content = escapeHtml(li[1]).replace(/`([^`]+)`/g, '<code>$1</code>');
+      // normalize/format content (reuse existing logic)
+      let content = escapeHtml(contentRaw).replace(/`([^`]+)`/g, '<code>$1</code>');
       try { content = typographicTransform(content); } catch (e) {}
       content = content.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
         return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
@@ -578,10 +575,64 @@ function simpleMarkdownToHtml(md) {
         .replace(/~~(.+?)~~/g, '<del>$1</del>')
         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
         .replace(/\*(.+?)\*/g, '<em>$1</em>');
-      html += `<li>${content}</li>`;
+
+      // target number of open <ul> elements: indent 0 => 1 open ul, indent 1 => 2 open uls, etc.
+      const targetStackLen = indent + 1;
+
+      // Close lists that are deeper than target (close their open <li> first)
+      while (listStack.length > targetStackLen) {
+        if (liOpenStack.pop()) html += '</li>';
+        html += '</ul>';
+        listStack.pop();
+      }
+
+      // Open lists until we reach the target depth. New nested <ul> will be inserted inside the currently open <li>.
+      while (listStack.length < targetStackLen) {
+        // if opening the top-level list and it's the first list, honor isTask for its class
+        if (listStack.length === 0) {
+          if (isTask) { html += '<ul class="task-list">'; listStack.push('task'); liOpenStack.push(false); }
+          else { html += '<ul>'; listStack.push('normal'); liOpenStack.push(false); }
+        } else {
+          // nested list opened inside the parent <li>
+          html += '<ul>';
+          listStack.push('normal');
+          liOpenStack.push(false);
+        }
+      }
+
+      // ensure the list type at current level matches the item's type (task vs normal)
+      const top = listStack[listStack.length - 1];
+      if ((isTask && top !== 'task') || (!isTask && top === 'task')) {
+        if (liOpenStack.pop()) html += '</li>';
+        html += '</ul>';
+        listStack.pop();
+        if (Task) { html += '<ul class="task-list">'; listStack.push('task'); liOpenStack.push(false); }
+        else { html += '<ul>'; listStack.push('normal'); liOpenStack.push(false); }
+      }
+
+      // close previous sibling <li> at this level if it is still open
+      if (listStack.length > 0 && liOpenStack[listStack.length - 1]) {
+        html += '</li>';
+        liOpenStack[listStack.length - 1] = false;
+      }
+
+      // emit the list item but DO NOT close </li> yet — keep it open to allow nested <ul> inside it.
+      if (isTask) {
+        const checked = String(task[2] || '').toLowerCase() === 'x';
+        html += `<li class="task-item"><input type="checkbox" ${checked ? 'checked' : ''} disabled aria-hidden="true" /> ${content}`;
+      } else {
+        html += `<li>${content}`;
+      }
+      // mark the <li> at this level as open
+      liOpenStack[listStack.length - 1] = true;
       continue;
     } else {
-      if (inList) { html += '</ul>'; inList = false; }
+      // close any open lists before handling non-list blocks (close open <li> first)
+      while (listStack.length > 0) {
+        if (liOpenStack.pop()) html += '</li>';
+        html += '</ul>';
+        listStack.pop();
+      }
     }
 
     // images on their own line or inline / inline formatting for paragraphs
@@ -602,7 +653,7 @@ function simpleMarkdownToHtml(md) {
     }
   }
 
-  if (inList) html += '</ul>';
+  while (listStack.length > 0) { if (liOpenStack.pop()) html += '</li>'; html += '</ul>'; listStack.pop(); }
   return html;
 }
 

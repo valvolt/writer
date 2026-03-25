@@ -329,6 +329,13 @@ function typographicTransform(s) {
   }
   s = out;
 
+  // arrows — replace only when surrounded by whitespace or at string boundaries.
+  // Allow optional spaces between arrow characters so "- >" and "->" both work.
+  s = s.replace(/(^|\s)-\s*>\s*(?=\s|$)/g, '$1→ ');
+  s = s.replace(/(^|\s)<\s*-\s*(?=\s|$)/g, '$1← ');
+  s = s.replace(/(^|\s)=\s*>\s*(?=\s|$)/g, '$1⇒ ');
+  s = s.replace(/(^|\s)<\s*=\s*(?=\s|$)/g, '$1⇐ ');
+
   // restore code placeholders
   s = s.replace(/__CODE_PLACEHOLDER_(\d+)__/g, (_m, idx) => placeholders[Number(idx)] || '');
   return s;

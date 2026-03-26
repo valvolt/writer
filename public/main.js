@@ -204,6 +204,11 @@ function setEditorEnabled(enabled) {
       if (preview) preview.innerHTML = '';
     }
     if (saveBtn) saveBtn.disabled = !enabled;
+    // Also enable/disable speech UI controls to prevent usage when editing is not allowed
+    try {
+      if (typeof speechToggle !== 'undefined' && speechToggle) speechToggle.disabled = !enabled;
+      if (typeof speechLang !== 'undefined' && speechLang) speechLang.disabled = !enabled;
+    } catch (e) {}
   } catch (e) {
     console.warn('setEditorEnabled error', e);
   }
@@ -2452,6 +2457,261 @@ preview.addEventListener('contextmenu', (ev) => {
  });
 
  // initial load
+
+// --- Speech-to-text (Web Speech API) ---
+// Client-only implementation: toggles microphone and inserts transcripts into the active editor.
+// Privacy: audio never leaves the user's device (no server upload).
+let recognition = null;
+let speechActive = false;
+let lastInterim = null; // { start, end, text } for inline interim replacement
+
+ // two-letter dropdown mapping -> default locale (BCP-47)
+const _speechLangs = [
+  { code: 'EN', locale: 'en-US' },
+  { code: 'FR', locale: 'fr-FR' },
+  { code: 'ES', locale: 'es-ES' },
+  { code: 'DE', locale: 'de-DE' },
+  { code: 'IT', locale: 'it-IT' },
+  { code: 'PT', locale: 'pt-BR' },
+  { code: 'RU', locale: 'ru-RU' },
+  { code: 'ZH', locale: 'zh-CN' },
+  { code: 'JA', locale: 'ja-JP' },
+  { code: 'KO', locale: 'ko-KR' },
+  { code: 'NL', locale: 'nl-NL' },
+  { code: 'SV', locale: 'sv-SE' },
+  { code: 'DA', locale: 'da-DK' },
+  { code: 'NO', locale: 'nb-NO' },
+  { code: 'FI', locale: 'fi-FI' },
+  { code: 'PL', locale: 'pl-PL' },
+  { code: 'CS', locale: 'cs-CZ' },
+  { code: 'HU', locale: 'hu-HU' },
+  { code: 'AR', locale: 'ar-SA' },
+  { code: 'HE', locale: 'he-IL' },
+  { code: 'HI', locale: 'hi-IN' }
+];
+
+// Create or reuse UI controls placed next to the story title.
+// Button id: speechToggle, Select id: speechLang
+let speechToggle = document.getElementById('speechToggle');
+let speechLang = document.getElementById('speechLang');
+
+(function initSpeechUI() {
+  try {
+    // create toggle button if missing
+    if (!speechToggle) {
+      speechToggle = document.createElement('button');
+      speechToggle.id = 'speechToggle';
+      speechToggle.title = 'Toggle speech-to-text';
+      speechToggle.type = 'button';
+      speechToggle.textContent = '🎙️';
+      speechToggle.style.marginLeft = '8px';
+      speechToggle.style.cursor = 'pointer';
+      speechToggle.setAttribute('aria-pressed', 'false');
+      if (currentStoryTitle && currentStoryTitle.parentNode) {
+        currentStoryTitle.parentNode.insertBefore(speechToggle, currentStoryTitle.nextSibling);
+      } else {
+        document.body.appendChild(speechToggle);
+      }
+    }
+
+    // create language select if missing
+    if (!speechLang) {
+      speechLang = document.createElement('select');
+      speechLang.id = 'speechLang';
+      speechLang.style.marginLeft = '8px';
+      _speechLangs.forEach(l => {
+        const o = document.createElement('option');
+        o.value = l.locale;
+        o.textContent = l.code;
+        speechLang.appendChild(o);
+      });
+      // default to navigator language when possible
+      try {
+        const nav = (navigator.language || navigator.userLanguage || 'en-US').toLowerCase();
+        const found = _speechLangs.find(x => nav.startsWith(x.locale.split('-')[0]));
+        if (found) speechLang.value = found.locale;
+      } catch (e) {}
+      if (currentStoryTitle && currentStoryTitle.parentNode) {
+        // insert after the toggle so order is: title -> toggle -> lang
+        if (speechToggle && speechToggle.nextSibling) currentStoryTitle.parentNode.insertBefore(speechLang, speechToggle.nextSibling);
+        else currentStoryTitle.parentNode.insertBefore(speechLang, currentStoryTitle.nextSibling);
+      } else {
+        document.body.appendChild(speechLang);
+      }
+    }
+  } catch (e) {
+    console.warn('initSpeechUI failed', e);
+  }
+})();
+
+function isSpeechSupported() {
+  return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function updateSpeechUI(active) {
+  try {
+    if (!speechToggle) return;
+    speechToggle.setAttribute('aria-pressed', String(!!active));
+    if (active) {
+      speechToggle.style.background = '#b71c1c';
+      speechToggle.style.color = '#fff';
+      speechToggle.textContent = '🎙️●';
+    } else {
+      speechToggle.style.background = '';
+      speechToggle.style.color = '';
+      speechToggle.textContent = '🎙️';
+    }
+  } catch (e) {}
+}
+
+function insertInterim(interimText) {
+  if (!editor) return;
+  try {
+    // Determine insertion start: reuse lastInterim.start when present, else use current caret
+    const selStart = (typeof editor.selectionStart === 'number') ? editor.selectionStart : editor.value.length;
+    const selEnd = (typeof editor.selectionEnd === 'number') ? editor.selectionEnd : selStart;
+    const start = lastInterim ? lastInterim.start : selStart;
+    const after = lastInterim ? editor.value.slice(lastInterim.end) : editor.value.slice(selEnd);
+    const before = editor.value.slice(0, start);
+    const newValue = before + interimText + after;
+    editor.value = newValue;
+    const newPos = before.length + interimText.length;
+    editor.selectionStart = editor.selectionEnd = newPos;
+    lastInterim = { start: start, end: newPos, text: interimText };
+    renderPreview();
+  } catch (e) {
+    console.warn('insertInterim failed', e);
+  }
+}
+
+function insertFinal(finalText) {
+  if (!editor) return;
+  try {
+    if (lastInterim) {
+      const start = lastInterim.start;
+      const after = editor.value.slice(lastInterim.end);
+      const before = editor.value.slice(0, start);
+      editor.value = before + finalText + after;
+      const pos = before.length + finalText.length;
+      editor.selectionStart = editor.selectionEnd = pos;
+      lastInterim = null;
+    } else {
+      // Insert at current selection
+      const selStart = (typeof editor.selectionStart === 'number') ? editor.selectionStart : editor.value.length;
+      const selEnd = (typeof editor.selectionEnd === 'number') ? editor.selectionEnd : selStart;
+      const before = editor.value.slice(0, selStart);
+      const after = editor.value.slice(selEnd);
+      editor.value = before + finalText + after;
+      const pos = before.length + finalText.length;
+      editor.selectionStart = editor.selectionEnd = pos;
+    }
+    renderPreview();
+    // Persist the change shortly after finalizing
+    try { scheduleAutoSave(200); } catch (e) {}
+  } catch (e) {
+    console.warn('insertFinal failed', e);
+  }
+}
+
+function startRecognition() {
+  if (!isSpeechSupported()) {
+    alert('Speech recognition not supported in this browser.');
+    return;
+  }
+  if (speechActive) return;
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  try {
+    recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = (speechLang && speechLang.value) ? speechLang.value : 'en-US';
+
+    recognition.onresult = (ev) => {
+      let interim = '';
+      let finals = '';
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const r = ev.results[i];
+        if (r.isFinal) finals += (r[0] && r[0].transcript) ? r[0].transcript : '';
+        else interim += (r[0] && r[0].transcript) ? r[0].transcript : '';
+      }
+      if (interim) {
+        insertInterim(interim);
+      }
+      if (finals) {
+        insertFinal(finals);
+      }
+    };
+
+    recognition.onerror = (err) => {
+      console.warn('Speech recognition error', err);
+      try {
+        if (err && err.error === 'not-allowed') {
+          alert('Microphone access blocked. Please enable microphone permission for this site.');
+        }
+      } catch (e) {}
+    };
+
+    recognition.onend = () => {
+      // Stopped listening (either user toggled off or browser ended)
+      speechActive = false;
+      updateSpeechUI(false);
+      recognition = null;
+    };
+
+    recognition.start();
+    speechActive = true;
+    updateSpeechUI(true);
+    try { editor && editor.focus(); } catch (e) {}
+  } catch (e) {
+    console.warn('startRecognition failed', e);
+    alert('Failed to start speech recognition: ' + (e && e.message ? e.message : String(e)));
+  }
+}
+
+function stopRecognition() {
+  try {
+    if (recognition) {
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+      try { recognition.stop(); } catch (e) {}
+      recognition = null;
+    }
+  } catch (e) {
+    console.warn('stopRecognition error', e);
+  } finally {
+    speechActive = false;
+    updateSpeechUI(false);
+    lastInterim = null;
+  }
+}
+
+ // Wire the toggle button
+ if (speechToggle) {
+   speechToggle.addEventListener('click', (ev) => {
+     ev.preventDefault();
+     console.debug('[debug] speechToggle clicked, speechActive=', speechActive);
+     if (!speechActive) startRecognition();
+     else stopRecognition();
+   });
+ }
+
+// Accessibility: pressing Enter/Space on the toggle when focused should toggle
+if (speechToggle) {
+  speechToggle.addEventListener('keydown', (e) => {
+    if (e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault();
+      speechToggle.click();
+    }
+  });
+}
+
+// Ensure we stop recognition when the page unloads
+window.addEventListener('beforeunload', () => {
+  try { stopRecognition(); } catch (e) {}
+});
+
+// ensure editor is disabled until a story is opened
  refreshStories();
  // ensure editor is disabled until a story is opened
  setEditorEnabled(false);

@@ -1893,15 +1893,30 @@ if (createTileBtn) {
     const res = await api.createTile(state.currentStory, title, '');
     if (!res || !res.ok) return alert(res && res.error ? res.error : 'Create tile failed');
     if (newTileTitle) newTileTitle.value = '';
+
+    // Ensure the UI knows we're opening the newly created tile before refreshing lists
+    state.currentView = { type: 'tile', id: res.id };
+    try {
+      currentStoryTitle.textContent = `${state.currentStory} - ${res.tile && res.tile.title ? res.tile.title : '(untitled)'}`;
+    } catch (e) {}
+
+    // Refresh tiles so the new tile is rendered and can be shown as active
     await refreshTiles();
-    // open newly created tile
+
+    // Fetch created tile content and open it in the editor
     const got = await api.getTile(state.currentStory, res.id);
     if (got && got.ok) {
-      state.currentView = { type: 'tile', id: res.id };
       editor.value = got.content || '';
-      // update header to show "story - tile title      try { currentStoryTitle.textContent = `${state.currentStory} - ${res.tile && res.tile.title ? res.tile.title : '(untitled)'}`; } catch (e) {}
       setEditorEnabled(true);
       renderPreview();
+      try { editor.focus(); } catch (e) {}
+      // Scroll the created tile into view in the tiles list
+      try {
+        const el = tileList && tileList.querySelector ? tileList.querySelector(`[data-id="${res.id}"]`) : null;
+        if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' });
+      } catch (e) {}
+      // Re-run refreshTiles to ensure active styling is consistent after opening
+      try { await refreshTiles(); } catch (e) { /* non-fatal */ }
     }
   });
 

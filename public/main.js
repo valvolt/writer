@@ -2497,28 +2497,46 @@ let speechLang = document.getElementById('speechLang');
 
 (function initSpeechUI() {
   try {
-    // create toggle button if missing
+    // create a container to hold speech controls (mic + language) so they remain grouped
+    let speechControls = document.getElementById('speechControls');
+    if (!speechControls) {
+      speechControls = document.createElement('div');
+      speechControls.id = 'speechControls';
+      speechControls.style.display = 'inline-flex';
+      speechControls.style.alignItems = 'center';
+      speechControls.style.gap = '6px';
+      speechControls.style.marginLeft = '8px';
+    }
+
+    // ensure container is present next to the story title (or fall back to body)
+    try {
+      if (currentStoryTitle && currentStoryTitle.parentNode) {
+        if (!speechControls.parentNode) currentStoryTitle.parentNode.insertBefore(speechControls, currentStoryTitle.nextSibling);
+      } else {
+        if (!speechControls.parentNode) document.body.appendChild(speechControls);
+      }
+    } catch (e) {
+      if (!speechControls.parentNode) document.body.appendChild(speechControls);
+    }
+
+    // create or move the toggle button into the container
     if (!speechToggle) {
       speechToggle = document.createElement('button');
       speechToggle.id = 'speechToggle';
       speechToggle.title = 'Toggle speech-to-text';
       speechToggle.type = 'button';
       speechToggle.textContent = '🎙️';
-      speechToggle.style.marginLeft = '8px';
       speechToggle.style.cursor = 'pointer';
       speechToggle.setAttribute('aria-pressed', 'false');
-      if (currentStoryTitle && currentStoryTitle.parentNode) {
-        currentStoryTitle.parentNode.insertBefore(speechToggle, currentStoryTitle.nextSibling);
-      } else {
-        document.body.appendChild(speechToggle);
-      }
+      speechControls.appendChild(speechToggle);
+    } else {
+      if (speechToggle.parentNode !== speechControls) speechControls.appendChild(speechToggle);
     }
 
-    // create language select if missing
+    // create or move the language select into the same container
     if (!speechLang) {
       speechLang = document.createElement('select');
       speechLang.id = 'speechLang';
-      speechLang.style.marginLeft = '8px';
       _speechLangs.forEach(l => {
         const o = document.createElement('option');
         o.value = l.locale;
@@ -2531,13 +2549,9 @@ let speechLang = document.getElementById('speechLang');
         const found = _speechLangs.find(x => nav.startsWith(x.locale.split('-')[0]));
         if (found) speechLang.value = found.locale;
       } catch (e) {}
-      if (currentStoryTitle && currentStoryTitle.parentNode) {
-        // insert after the toggle so order is: title -> toggle -> lang
-        if (speechToggle && speechToggle.nextSibling) currentStoryTitle.parentNode.insertBefore(speechLang, speechToggle.nextSibling);
-        else currentStoryTitle.parentNode.insertBefore(speechLang, currentStoryTitle.nextSibling);
-      } else {
-        document.body.appendChild(speechLang);
-      }
+      speechControls.appendChild(speechLang);
+    } else {
+      if (speechLang.parentNode !== speechControls) speechControls.appendChild(speechLang);
     }
   } catch (e) {
     console.warn('initSpeechUI failed', e);

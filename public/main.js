@@ -2458,6 +2458,71 @@ preview.addEventListener('contextmenu', (ev) => {
 
  // initial load
 
+/* --- Mobile mode detection ---
+   Mobile mode is true when:
+     - viewport height is greater than width (portrait)
+     - and viewport width is smaller than MOBILE_THRESHOLD (px)
+
+   Behavior:
+   - updates state.mobileMode
+   - toggles body.mobile-mode class
+   - exposes window._storyWriter.mobileMode and window._storyWriter.updateMobileMode
+   - debounced on resize/orientation/visualViewport changes
+*/
+const MOBILE_THRESHOLD = 640;
+
+function computeMobileMode(threshold = MOBILE_THRESHOLD) {
+  try {
+    return (window.innerHeight > window.innerWidth) && (window.innerWidth < threshold);
+  } catch (e) {
+    return false;
+  }
+}
+
+let _mobileModeDebounceTimer = null;
+function updateMobileMode(threshold = MOBILE_THRESHOLD) {
+  try {
+    const isMobile = computeMobileMode(threshold);
+    if (state && state.mobileMode === isMobile) return isMobile;
+    if (state) state.mobileMode = isMobile;
+    try {
+      if (isMobile) document.body.classList.add('mobile-mode');
+      else document.body.classList.remove('mobile-mode');
+    } catch (e) {}
+    window._storyWriter = window._storyWriter || {};
+    window._storyWriter.mobileMode = !!isMobile;
+    return isMobile;
+  } catch (e) {
+    console.warn('updateMobileMode failed', e);
+    return false;
+  }
+}
+
+function scheduleMobileModeUpdate(delay = 150) {
+  if (_mobileModeDebounceTimer) clearTimeout(_mobileModeDebounceTimer);
+  _mobileModeDebounceTimer = setTimeout(() => updateMobileMode(), delay);
+}
+
+// wire listeners for viewport changes
+try {
+  window.addEventListener('resize', () => scheduleMobileModeUpdate(120));
+  window.addEventListener('orientationchange', () => scheduleMobileModeUpdate(120));
+  if (window.visualViewport && typeof window.visualViewport.addEventListener === 'function') {
+    window.visualViewport.addEventListener('resize', () => scheduleMobileModeUpdate(120));
+  }
+  // inject a minimal stylesheet placeholder for .mobile-mode so authors can expand it in public/style.css later
+  if (!document.getElementById('mobileModeStyles')) {
+    const s = document.createElement('style');
+    s.id = 'mobileModeStyles';
+    s.textContent = 'body.mobile-mode { /* mobile mode active — add layout overrides in public/style.css as needed */ }';
+    document.head && document.head.appendChild(s);
+  }
+  // run an initial detection pass
+  scheduleMobileModeUpdate(0);
+} catch (e) {
+  console.warn('mobile mode init failed', e);
+}
+
 // --- Speech-to-text (Web Speech API) ---
 // Client-only implementation: toggles microphone and inserts transcripts into the active editor.
 // Privacy: audio never leaves the user's device (no server upload).
@@ -2993,8 +3058,16 @@ function applyAuthStatus(status) {
   }
 })();
 
- // expose for debugging
-window._storyWriter = { state, refreshStories, openStory, saveMainText };
+  // expose for debugging
+ window._storyWriter = Object.assign(window._storyWriter || {}, {
+   state,
+   refreshStories,
+   openStory,
+   saveMainText,
+   // expose mobile helpers
+   mobileMode: !!(state && state.mobileMode),
+   updateMobileMode
+ });
 
 (function() {
   // Sidebar splitter: allow resizing Stories / Tiles / Highlights panes vertically.

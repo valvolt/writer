@@ -65,7 +65,7 @@ if (!fs.existsSync(STORIES_ROOT)) {
        const isLocal = LOCAL_MODE;
        const isAuth = !!(req && req.oidc && req.oidc.isAuthenticated && req.oidc.isAuthenticated());
        if (isLocal) {
-         footerHtmlRoot = '<div id="mobileFooter" role="contentinfo" aria-hidden="false">Local Mode</div>';
+         footerHtmlRoot = '<div id="mobileFooter" role="contentinfo" aria-hidden="false" style="color:#b71c1c;font-weight:700">Local Mode</div>';
        } else if (isAuth) {
          footerHtmlRoot = '<div id="mobileFooter" role="contentinfo" aria-hidden="false"><a href="/logout" style="color:inherit;text-decoration:none">Log out</a></div>';
        }
@@ -1418,7 +1418,7 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
        const isLocal = LOCAL_MODE;
        const isAuth = !!(req && req.oidc && req.oidc.isAuthenticated && req.oidc.isAuthenticated());
        if (isLocal) {
-         footerHtmlPub = '<div id="mobileFooter" role="contentinfo" aria-hidden="false">Local Mode</div>';
+         footerHtmlPub = '<div id="mobileFooter" role="contentinfo" aria-hidden="false" style="color:#b71c1c;font-weight:700">Local Mode</div>';
        } else if (isAuth) {
          footerHtmlPub = '<div id="mobileFooter" role="contentinfo" aria-hidden="false"><a href="/logout" style="color:inherit;text-decoration:none">Log out</a></div>';
  }

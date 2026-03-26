@@ -2498,17 +2498,207 @@ function updateMobileMode(threshold = MOBILE_THRESHOLD) {
     } catch (e) {}
     window._storyWriter = window._storyWriter || {};
     window._storyWriter.mobileMode = !!isMobile;
+
     try {
       const logoutBtn3 = document.getElementById('logoutBtn');
       const localLabel3 = document.getElementById('localModeLabel');
       const isAuthNow3 = !!(logoutBtn3 && logoutBtn3.style && logoutBtn3.style.display !== 'none');
       const isLocalNow3 = !!(localLabel3 && localLabel3.style && localLabel3.style.display !== 'none');
+
+      // Ensure the standard mobile footer is present/updated
       ensureMobileFooter(isAuthNow3, isLocalNow3);
+
+      // If entering mobile mode, render a dedicated mobile-first "Write" view
+      if (isMobile) {
+        try {
+          // Only render mobile root if not already present
+          if (!document.getElementById('mobileRoot')) {
+            renderMobileRoot(); // builds header, create form, and mobile story list
+          } else {
+            // refresh story list contents if already rendered
+            populateMobileStoryList();
+            // focus input for a smooth mobile flow
+            const inp = document.querySelector('#mobileRoot input[name="mobileNewStory"]');
+            if (inp) try { inp.focus(); } catch (e) {}
+          }
+        } catch (e) {
+          console.warn('renderMobileRoot failed', e);
+        }
+      } else {
+        // leaving mobile mode: remove mobileRoot if present to restore desktop DOM
+        try {
+          const mr = document.getElementById('mobileRoot');
+          if (mr && mr.parentNode) mr.parentNode.removeChild(mr);
+        } catch (e) {
+          // non-fatal
+        }
+      }
     } catch (e) {}
+
     return isMobile;
   } catch (e) {
     console.warn('updateMobileMode failed', e);
     return false;
+  }
+}
+
+/*
+  Mobile renderer: renderMobileRoot() builds a simple stacked mobile UI showing:
+   - Header "Story Writer"
+   - Create story input + button
+   - List of existing stories (id: mobileStoryList)
+  populateMobileStoryList() refreshes the list from the API.
+*/
+function renderMobileRoot() {
+  try {
+    // Avoid duplicate rendering
+    if (document.getElementById('mobileRoot')) return;
+    const root = document.createElement('div');
+    root.id = 'mobileRoot';
+
+    // Header
+    const header = document.createElement('header');
+    header.className = 'mobile-header';
+    const title = document.createElement('div');
+    title.textContent = 'Story Writer';
+    title.style.fontSize = '18px';
+    title.style.fontWeight = '700';
+    header.appendChild(title);
+    root.appendChild(header);
+
+    // Body (create form + list)
+    const body = document.createElement('div');
+    body.className = 'mobile-body';
+
+    // Create form
+    const form = document.createElement('div');
+    form.className = 'mobile-form';
+    const input = document.createElement('input');
+    input.name = 'mobileNewStory';
+    input.placeholder = 'New story name';
+    input.style.padding = '10px';
+    input.style.borderRadius = '8px';
+    input.style.border = '1px solid #ddd';
+    const btn = document.createElement('button');
+    btn.textContent = 'Create';
+    btn.className = 'mobile-big-btn';
+    btn.style.padding = '10px 12px';
+    btn.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      const name = (input.value || '').trim();
+      if (!name) return alert('Enter a story name');
+      try {
+        const res = await api.createStory(name);
+        if (!res || !res.ok) return alert(res && res.error ? res.error : 'Create failed');
+        input.value = '';
+        await populateMobileStoryList();
+        // open story after creation for quick flow
+        openStory(res.name);
+      } catch (err) {
+        console.error('mobile create story failed', err);
+        alert('Create failed');
+      }
+    });
+    form.appendChild(input);
+    form.appendChild(btn);
+    body.appendChild(form);
+
+    // Stories list container
+    const ul = document.createElement('ul');
+    ul.id = 'mobileStoryList';
+    ul.style.listStyle = 'none';
+    ul.style.padding = '0';
+    ul.style.margin = '12px 0';
+    ul.style.display = 'flex';
+    ul.style.flexDirection = 'column';
+    ul.style.gap = '8px';
+    body.appendChild(ul);
+
+    root.appendChild(body);
+
+    // Insert mobile root at top of body so footer remains at bottom
+    document.body.insertBefore(root, document.body.firstChild);
+
+    // Focus input for immediate typing on mobile
+    try { input.focus(); } catch (e) {}
+
+    // populate list initially
+    populateMobileStoryList();
+  } catch (e) {
+    console.warn('renderMobileRoot error', e);
+  }
+}
+
+async function populateMobileStoryList() {
+  try {
+    const ul = document.getElementById('mobileStoryList');
+    if (!ul) return;
+    ul.innerHTML = '';
+    const res = await api.listStories().catch(() => null);
+    if (!res || !res.ok) {
+      // show an empty state
+      const li = document.createElement('li');
+      li.style.padding = '12px';
+      li.style.border = '1px solid #eee';
+      li.style.borderRadius = '8px';
+      li.textContent = 'No stories';
+      ul.appendChild(li);
+      return;
+    }
+    const stories = (res.stories || []).map(s => {
+      const id = (typeof s === 'string') ? s : (s.id || s.name || '');
+      const name = (typeof s === 'string') ? s : (s.name || s.id || '');
+      return { id, name };
+    }).sort((a, b) => a.name.localeCompare(b.name));
+
+    if (stories.length === 0) {
+      const li = document.createElement('li');
+      li.style.padding = '12px';
+      li.style.border = '1px solid #eee';
+      li.style.borderRadius = '8px';
+      li.textContent = 'No stories';
+      ul.appendChild(li);
+      return;
+    }
+
+    for (const s of stories) {
+      const li = document.createElement('li');
+      li.style.padding = '12px';
+      li.style.border = '1px solid #eee';
+li.style.borderRadius = '8px';
+li.style.background = '#fafafa';
+      li.style.display = 'flex';
+li.style.justifyContent = 'space-between';
+li.style.alignItems = 'center';
+
+      const left = document.createElement('div');
+      left.style.flex = '1';
+      left.style.minWidth = '0';
+      left.textContent = s.name;
+      left.style.fontWeight = '600';
+      left.style.overflow = 'hidden';
+      left.style.textOverflow = 'ellipsis';
+      left.style.whiteSpace = 'nowrap';
+      left.style.marginRight = '8px';
+      left.addEventListener('click', () => {
+        // emulate tapping to story
+        openStory(s.name);
+      });
+
+      const openBtn = document.createElement('button');
+      openBtn.textContent = 'Open';
+      openBtn.style.marginLeft = '8px';
+      openBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        openStory(s.name);
+      });
+
+      li.appendChild(left);
+      li.appendChild(openBtn);
+      ul.appendChild(li);
+    }
+  } catch (e) {
+    console.warn('populateMobileStoryList failed', e);
   }
 }
 

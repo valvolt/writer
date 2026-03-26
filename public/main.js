@@ -3011,15 +3011,13 @@ function ensureMobileFooter(isAuth, isLocal) {
       el.appendChild(lm);
       return;
     }
-    // Authenticated -> show logout button
+    // Authenticated -> show logout link styled like the root page
     if (isAuth) {
-      const btn = document.createElement('button');
-      btn.textContent = 'Log out';
-      btn.style.padding = '8px 12px';
-      btn.style.borderRadius = '8px';
-      btn.style.cursor = 'pointer';
-      btn.addEventListener('click', () => { window.location.href = '/logout'; });
-      el.appendChild(btn);
+      const a = document.createElement('a');
+      a.href = '/logout';
+      a.className = 'write-btn';
+      a.textContent = 'Log out';
+      el.appendChild(a);
       return;
     }
 

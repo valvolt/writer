@@ -1006,6 +1006,13 @@ async function openStory(name) {
         ? (marked.parse(combined || ''))
         : simpleMarkdownToHtml(combined || '');
       preview.innerHTML = html || '<div class="empty-preview">[no tiles]</div>';
+      try {
+        const logoutBtnF = document.getElementById('logoutBtn');
+        const localLabelF = document.getElementById('localModeLabel');
+        const isAuthF = !!(logoutBtnF && logoutBtnF.style && logoutBtnF.style.display !== 'none');
+        const isLocalF = !!(localLabelF && localLabelF.style && localLabelF.style.display !== 'none');
+        ensureMobileFooter(isAuthF, isLocalF);
+      } catch (e) {}
     } else {
       // fallback to showing text.md preview if tiles unavailable
       editor.value = res.text || '';
@@ -2491,6 +2498,13 @@ function updateMobileMode(threshold = MOBILE_THRESHOLD) {
     } catch (e) {}
     window._storyWriter = window._storyWriter || {};
     window._storyWriter.mobileMode = !!isMobile;
+    try {
+      const logoutBtn3 = document.getElementById('logoutBtn');
+      const localLabel3 = document.getElementById('localModeLabel');
+      const isAuthNow3 = !!(logoutBtn3 && logoutBtn3.style && logoutBtn3.style.display !== 'none');
+      const isLocalNow3 = !!(localLabel3 && localLabel3.style && localLabel3.style.display !== 'none');
+      ensureMobileFooter(isAuthNow3, isLocalNow3);
+    } catch (e) {}
     return isMobile;
   } catch (e) {
     console.warn('updateMobileMode failed', e);
@@ -2942,9 +2956,81 @@ function applyAuthStatus(status) {
     // Run an initial async check for publishability (do not block applyAuthStatus)
     try { updatePublishButtonState(); } catch (e) {}
 
+    // Ensure mobile footer reflects current auth/local state when auth status changes
+    try {
+      const logoutBtn2 = document.getElementById('logoutBtn');
+      const localLabel2 = document.getElementById('localModeLabel');
+      const isAuthNow2 = !!(logoutBtn2 && logoutBtn2.style && logoutBtn2.style.display !== 'none');
+      const isLocalNow2 = !!(localLabel2 && localLabel2.style && localLabel2.style.display !== 'none');
+      ensureMobileFooter(isAuthNow2, isLocalNow2);
+    } catch (e) {}
+
   }
 
- // wire buttons to server-side /login and /logout
+/* Mobile footer helper — shown only in mobile mode: logout button or red "Local Mode" label.
+   ensureMobileFooter(isAuth, isLocal)
+     - isAuth: boolean, true when user is authenticated
+     - isLocal: boolean, true when running in localMode
+*/
+function ensureMobileFooter(isAuth, isLocal) {
+  try {
+    // remove existing footer if mobile mode disabled
+    if (!state || !state.mobileMode) {
+      const prev = document.getElementById('mobileFooter');
+      if (prev && prev.parentNode) prev.parentNode.removeChild(prev);
+      return;
+    }
+
+    let el = document.getElementById('mobileFooter');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'mobileFooter';
+      el.style.position = 'fixed';
+      el.style.left = '0';
+      el.style.right = '0';
+      el.style.bottom = '0';
+      el.style.zIndex = '9999';
+      el.style.display = 'flex';
+      el.style.justifyContent = 'center';
+      el.style.alignItems = 'center';
+      el.style.padding = '10px';
+      el.style.boxShadow = '0 -6px 18px rgba(0,0,0,0.08)';
+      el.style.background = 'var(--footer-bg, #fff)';
+      el.style.backdropFilter = 'blur(4px)';
+      document.body.appendChild(el);
+    }
+    // clear contents
+    el.innerHTML = '';
+    // Local mode preferred label
+    if (isLocal) {
+      const lm = document.createElement('div');
+      lm.textContent = 'Local Mode';
+      lm.style.color = '#b71c1c';
+      lm.style.fontWeight = '700';
+      lm.style.fontSize = '15px';
+      el.appendChild(lm);
+      return;
+    }
+    // Authenticated -> show logout button
+    if (isAuth) {
+      const btn = document.createElement('button');
+      btn.textContent = 'Log out';
+      btn.style.padding = '8px 12px';
+      btn.style.borderRadius = '8px';
+      btn.style.cursor = 'pointer';
+      btn.addEventListener('click', () => { window.location.href = '/logout'; });
+      el.appendChild(btn);
+      return;
+    }
+
+    // otherwise remove footer
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  } catch (e) {
+    console.warn('ensureMobileFooter failed', e);
+  }
+}
+
+// wire buttons to server-side /login and /logout
  if (loginBtn) loginBtn.addEventListener('click', () => { window.location.href = '/login'; });
  if (logoutBtn) logoutBtn.addEventListener('click', () => { window.location.href = '/logout'; });
  if (splashLoginBtn) splashLoginBtn.addEventListener('click', () => { window.location.href = '/login'; });

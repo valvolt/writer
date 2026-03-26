@@ -3191,25 +3191,21 @@ function ensureMobileFooter(isAuth, isLocal) {
     }
     // clear contents
     el.innerHTML = '';
-    // Local mode preferred label
-    if (isLocal) {
-      const lm = document.createElement('div');
-      lm.textContent = 'Local Mode';
-      lm.style.color = '#b71c1c';
-      lm.style.fontWeight = '700';
-      lm.style.fontSize = '15px';
-      el.appendChild(lm);
-      return;
-    }
-    // Authenticated -> show logout link styled like the root page
-    if (isAuth) {
-      const a = document.createElement('a');
-      a.href = '/logout';
-      a.className = 'write-btn';
-      a.textContent = 'Log out';
-      el.appendChild(a);
-      return;
-    }
+    // Mobile "Back" button (replaces Local Mode / Log out in mobile view)
+    const backBtn = document.createElement('button');
+    backBtn.id = 'mobileBackBtn';
+    backBtn.className = 'write-btn';
+    backBtn.textContent = 'Back';
+    backBtn.addEventListener('click', () => {
+      try {
+        if (window.history && window.history.length > 1) window.history.back();
+        else window.location.href = '/';
+      } catch (e) {
+        window.location.href = '/';
+      }
+    });
+    el.appendChild(backBtn);
+    return;
 
     // otherwise remove footer
     if (el && el.parentNode) el.parentNode.removeChild(el);

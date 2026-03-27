@@ -351,6 +351,9 @@ body.mobile-mode header.mobile-header {
   flex: 1 1 auto;
   overflow-y: auto;
   padding: 12px 6px;
+  /* ensure content is positioned below the fixed mobile header */
+  padding-top: 56px !important;
+  box-sizing: border-box;
 }
 .mobile-footer {
   flex: 0 0 auto;

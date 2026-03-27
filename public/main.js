@@ -4004,6 +4004,50 @@ function ensureMobileFooter(isAuth, isLocal) {
       return;
     }
 
+    // If viewing a published story route, show a simple Back footer that navigates to root.
+    const isPublishedRoute = (typeof window !== 'undefined' && window.location && window.location.pathname && String(window.location.pathname).startsWith('/published'));
+    // prefer the runtime mobile state, but fall back to a fresh computation in case the mobile-mode class hasn't been applied yet
+    const isMobileNow = (state && state.mobileMode) || (typeof computeMobileMode === 'function' ? computeMobileMode() : false);
+    if (isPublishedRoute && isMobileNow) {
+      // remove any existing footer
+      const prev = document.getElementById('mobileFooter');
+      if (prev && prev.parentNode) prev.parentNode.removeChild(prev);
+
+      const pubFooter = document.createElement('div');
+      pubFooter.id = 'mobileFooter';
+      // attach to mobileRoot when available so footer sits above mobile UI containers
+      const attachTarget = document.getElementById('mobileRoot') || document.body;
+      pubFooter.style.position = 'fixed';
+      pubFooter.style.left = '0';
+      pubFooter.style.right = '0';
+      pubFooter.style.bottom = '0';
+      // ensure it's above other UI chrome
+      pubFooter.style.zIndex = '99999';
+      pubFooter.style.display = 'flex';
+      pubFooter.style.justifyContent = 'center';
+      pubFooter.style.alignItems = 'center';
+      pubFooter.style.padding = '12px';
+      pubFooter.style.boxShadow = '0 -6px 18px rgba(0,0,0,0.12)';
+      pubFooter.style.background = 'var(--footer-bg, #fff)';
+      pubFooter.style.backdropFilter = 'blur(6px)';
+      pubFooter.setAttribute('role', 'navigation');
+      pubFooter.setAttribute('aria-hidden', 'false');
+
+      const backBtn = document.createElement('button');
+      backBtn.id = 'mobileBackBtn';
+      backBtn.className = 'write-btn';
+      backBtn.textContent = 'Back';
+      backBtn.style.minWidth = '88px';
+      backBtn.style.textAlign = 'center';
+      backBtn.addEventListener('click', () => {
+        try { window.location.href = '/'; } catch (e) { try { history.replaceState(null, '', '/'); window.location.reload(); } catch (err) {} }
+      });
+      pubFooter.appendChild(backBtn);
+
+      try { attachTarget.appendChild(pubFooter); } catch (e) { document.body.appendChild(pubFooter); }
+      return;
+    }
+
     let el = document.getElementById('mobileFooter');
     if (!el) {
       el = document.createElement('div');

@@ -3691,6 +3691,11 @@ function ensureMobileFooter(isAuth, isLocal) {
             try { renderMobileStoryView(state.currentStory); } catch (e) { try { renderMobileRoot(); } catch (err) {} }
             return;
           }
+          if (state && state.mobileScreen === 'highlights') {
+            // from highlights view -> go back to story chooser
+            try { renderMobileStoryView(state.currentStory); } catch (e) { try { renderMobileRoot(); } catch (err) {} }
+            return;
+          }
           if (state && state.mobileScreen === 'story') {
             // from story view -> go to story list
             try { closeCurrentStory(); } catch (e) {}

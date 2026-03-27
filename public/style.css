@@ -305,10 +305,23 @@ body.mobile-mode {
 body.mobile-mode #sidebar,
 body.mobile-mode main#main,
 body.mobile-mode .splitter,
-body.mobile-mode header,
+body.mobile-mode header:not(.mobile-header),
 body.mobile-mode #editorArea,
 body.mobile-mode .preview {
   display: none !important;
+}
+
+/* Ensure the dedicated mobile header remains visible (overrides the generic hide above) */
+body.mobile-mode header.mobile-header {
+  display: flex !important;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 56px;
+  z-index: 1001;
+  background: #fff;
+  box-shadow: 0 1px 0 rgba(0,0,0,0.04);
 }
 
 /* Mobile root container */

@@ -618,7 +618,7 @@ function simpleMarkdownToHtml(md) {
         if (liOpenStack.pop()) html += '</li>';
         html += '</ul>';
         listStack.pop();
-        if (Task) { html += '<ul class="task-list">'; listStack.push('task'); liOpenStack.push(false); }
+        if (isTask) { html += '<ul class="task-list">'; listStack.push('task'); liOpenStack.push(false); }
         else { html += '<ul>'; listStack.push('normal'); liOpenStack.push(false); }
       }
 
@@ -680,7 +680,8 @@ function simpleMarkdownToHtml(md) {
 function sanitizeForCounting(text) {
   if (!text || typeof text !== 'string') return '';
   // remove markdown images: ![alt](url)
-  let s = text.replace(/!\[[^\]]*]\)]*\)/g, ' ');
+  // robust pattern: match `![...](...)`
+  let s = text.replace(/!\[[^\]]*\]\([^\)]*\)/g, ' ');
   // remove tags like #keyword (allow accented letters in tags)
   s = s.replace(/#[\p{L}\p{N}_-]+/gu, ' ');
   // normalize whitespace
@@ -2794,88 +2795,12 @@ function renderMobileStoryView(storyName) {
     hlBtn.style.display = 'flex';
     hlBtn.style.alignItems = 'center';
     hlBtn.style.justifyContent = 'center';
-    hlBtn.addEventListener('click', async () => {
+    hlBtn.addEventListener('click', () => {
       try {
-        const content = document.getElementById('mobileStoryContent');
-        if (!content) return;
-        content.innerHTML = '';
-        const h = document.createElement('div');
-        h.textContent = 'Loading highlights...';
-        h.className = 'small';
-        content.appendChild(h);
-        const res = await api.listHighlights(storyName).catch(() => null);
-        content.innerHTML = '';
-        if (!res || !res.ok || !Array.isArray(res.highlights) || res.highlights.length === 0) {
-          const n = document.createElement('div');
-          n.textContent = 'No highlights';
-          n.className = 'small';
-          content.appendChild(n);
-          return;
-        }
-        const ul = document.createElement('ul');
-        ul.style.listStyle = 'none';
-        ul.style.padding = '0';
-        ul.style.margin = '0';
-        ul.style.width = '100%';
-        ul.style.display = 'flex';
-        ul.style.flexDirection = 'column';
-        ul.style.gap = '8px';
-        for (const hmeta of res.highlights) {
-          const li = document.createElement('li');
-          li.style.padding = '10px';
-          li.style.border = '1px solid #eee';
-          li.style.borderRadius = '8px';
-          li.style.background = '#fff';
-          li.style.display = 'flex';
-          li.style.justifyContent = 'space-between';
-          li.style.alignItems = 'center';
-
-          const left = document.createElement('div');
-          left.textContent = hmeta.title || hmeta.id || '(untitled)';
-          left.style.fontWeight = '600';
-          left.style.flex = '1';
-          left.style.minWidth = '0';
-          left.style.overflow = 'hidden';
-          left.style.textOverflow = 'ellipsis';
-          left.style.whiteSpace = 'nowrap';
-
-          const openBtn = document.createElement('button');
-          openBtn.textContent = 'Preview';
-          openBtn.addEventListener('click', async (ev) => {
-            ev.stopPropagation();
-            content.innerHTML = '';
-            const p = document.createElement('div');
-            p.textContent = 'Loading...';
-            content.appendChild(p);
-            try {
-              const got = await api.getHighlight(storyName, hmeta.id).catch(() => null);
-              content.innerHTML = '';
-              if (!got || !got.ok) {
-                const e = document.createElement('div');
-                e.textContent = 'Failed to load highlight';
-                content.appendChild(e);
-                return;
-              }
-              const pre = document.createElement('pre');
-              pre.style.whiteSpace = 'pre-wrap';
-              pre.style.wordBreak = 'break-word';
-              pre.textContent = got.content || '';
-              content.appendChild(pre);
-            } catch (err) {
-              content.innerHTML = '';
-              const e = document.createElement('div');
-              e.textContent = 'Error loading highlight';
-              content.appendChild(e);
-            }
-          });
-
-          li.appendChild(left);
-          li.appendChild(openBtn);
-          ul.appendChild(li);
-        }
-        content.appendChild(ul);
+        // Show a dedicated highlights screen for better mobile UX
+        renderMobileHighlightsView(storyName);
       } catch (e) {
-        console.warn('renderMobileStoryView.highlights failed', e);
+        console.warn('renderMobileStoryView -> renderMobileHighlightsView failed', e);
       }
     });
 
@@ -3075,7 +3000,7 @@ async function refreshMobileTilesList(storyName) {
           if (!got || !got.ok) return alert(got && got.error ? got.error : 'Failed to load tile');
           state.currentView = { type: 'tile', id: t.id };
           editor.value = got.content || '';
-          try { currentStoryTitle.textContent = `${storyName} -t.title || '(untitled)'}`; } catch (e) {}
+          try { currentStoryTitle.textContent = `${storyName} - ${t.title || '(untitled)'}`; } catch (e) {}
           setEditorEnabled(true);
           renderPreview();
         } catch (err) {
@@ -3090,6 +3015,175 @@ async function refreshMobileTilesList(storyName) {
     }
   } catch (e) {
     console.warn('refreshMobileTilesList failed', e);
+  }
+}
+
+/* Mobile Highlights screen renderer + helper
+   - Header: "<story> - Highlights"
+   - Main: create highlight form + list of highlights (mobileHighlightsList)
+   - Footer: mobile Back handled by ensureMobileFooter (Back from highlights returns to chooser)
+*/
+function renderMobileHighlightsView(storyName) {
+  try {
+    if (!document.getElementById('mobileRoot')) renderMobileRoot();
+    const root = document.getElementById('mobileRoot');
+    if (!root) return;
+    state.mobileScreen = 'highlights';
+
+    // clear and build header/body
+    root.innerHTML = '';
+
+    const header = document.createElement('header');
+    header.className = 'mobile-header';
+    header.style.display = 'flex';
+    header.style.alignItems = 'center';
+    header.style.justifyContent = 'center';
+    header.style.padding = '12px 8px';
+
+    const title = document.createElement('div');
+    title.textContent = `${storyName} - Highlights`;
+    title.style.fontSize = '18px';
+    title.style.fontWeight = '700';
+    header.appendChild(title);
+    root.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'mobile-body';
+    body.style.display = 'flex';
+    body.style.flexDirection = 'column';
+    body.style.alignItems = 'center';
+    body.style.gap = '12px';
+    body.style.padding = '12px';
+
+    // create form
+    const form = document.createElement('div');
+    form.style.display = 'flex';
+    form.style.flexDirection = 'column';
+    form.style.width = '100%';
+    form.style.gap = '8px';
+    const input = document.createElement('input');
+    input.placeholder = 'New highlight title';
+    input.id = 'mobileNewHighlightTitle';
+    input.style.padding = '10px';
+    input.style.borderRadius = '8px';
+    input.style.border = '1px solid #ddd';
+    input.style.width = '84%';
+    input.style.margin = '0 auto';
+    const createBtn = document.createElement('button');
+    createBtn.textContent = 'Create Highlight';
+    createBtn.className = 'mobile-big-btn';
+    createBtn.style.width = '84%';
+    createBtn.style.margin = '0 auto';
+    createBtn.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      const titleVal = (input.value || '').trim();
+      if (!titleVal) return alert('Enter a highlight title');
+      try {
+        // Reuse createEntityAndOpen to create and open the highlight
+        if (!state.currentStory) return alert('Open a story first');
+        await createEntityAndOpen('highlights', titleVal, true);
+        input.value = '';
+        await refreshMobileHighlightsList(storyName);
+      } catch (err) {
+        console.error('create highlight (mobile) failed', err);
+        alert('Create failed');
+      }
+    });
+
+    form.appendChild(input);
+    form.appendChild(createBtn);
+    body.appendChild(form);
+
+    // highlights list container
+    const listWrap = document.createElement('div');
+    listWrap.style.width = '100%';
+    listWrap.style.marginTop = '6px';
+    const ul = document.createElement('ul');
+    ul.id = 'mobileHighlightsList';
+    ul.style.listStyle = 'none';
+    ul.style.padding = '0';
+    ul.style.margin = '0';
+    ul.style.display = 'flex';
+    ul.style.flexDirection = 'column';
+    ul.style.gap = '8px';
+    listWrap.appendChild(ul);
+
+    root.appendChild(body);
+
+    // ensure mobile footer updated
+    try {
+      const logoutBtnF = document.getElementById('logoutBtn');
+      const localLabelF = document.getElementById('localModeLabel');
+      const isAuthF = !!(logoutBtnF && logoutBtnF.style && logoutBtnF.style.display !== 'none');
+      const isLocalF = !!(localLabelF && localLabelF.style && localLabelF.style.display !== 'none');
+      ensureMobileFooter(isAuthF, isLocalF);
+    } catch (e) {}
+
+    // focus input for quick highlight creation
+    try { input.focus(); } catch (e) {}
+
+    // populate list
+    refreshMobileHighlightsList(storyName);
+  } catch (e) {
+    console.warn('renderMobileHighlightsView error', e);
+  }
+}
+
+async function refreshMobileHighlightsList(storyName) {
+  try {
+    const ul = document.getElementById('mobileHighlightsList');
+    if (!ul) return;
+    ul.innerHTML = '';
+    const res = await api.listHighlights(storyName).catch(() => null);
+    if (!res || !res.ok || !Array.isArray(res.highlights) || res.highlights.length === 0) {
+      const li = document.createElement('li');
+      li.style.padding = '12px';
+      li.style.border = '1px solid #eee';
+      li.style.borderRadius = '8px';
+      li.textContent = 'No highlights';
+      ul.appendChild(li);
+      return;
+    }
+    for (const hmeta of res.highlights) {
+      const li = document.createElement('li');
+      li.style.padding = '10px';
+      li.style.border = '1px solid #eee';
+      li.style.borderRadius = '8px';
+      li.style.background = '#fff';
+      li.style.display = 'flex';
+      li.style.justifyContent = 'space-between';
+      li.style.alignItems = 'center';
+
+      const left = document.createElement('div');
+      left.textContent = hmeta.title || hmeta.id || '(untitled)';
+      left.style.fontWeight = '600';
+      left.style.flex = '1';
+      left.style.minWidth = '0';
+      left.style.overflow = 'hidden';
+      left.style.textOverflow = 'ellipsis';
+      left.style.whiteSpace = 'nowrap';
+
+      const openBtn = document.createElement('button');
+      openBtn.textContent = 'Open';
+      openBtn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        try {
+          const got = await api.getHighlight(storyName, hmeta.id).catch(() => null);
+          if (!got || !got.ok) return alert(got && got.error ? got.error : 'Failed to load highlight');
+          // open the highlight in the editor view
+          await openEntityInEditor('highlights', hmeta.id, got.title || hmeta.title || hmeta.id);
+        } catch (err) {
+          console.error('open highlight (mobile) failed', err);
+          alert('Failed to open highlight');
+        }
+      });
+
+      li.appendChild(left);
+      li.appendChild(openBtn);
+      ul.appendChild(li);
+    }
+  } catch (e) {
+    console.warn('refreshMobileHighlightsList failed', e);
   }
 }
 

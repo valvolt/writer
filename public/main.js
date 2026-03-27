@@ -969,6 +969,13 @@ async function openStory(name) {
   }
   state.currentStory = name;
   state.storyData = res;
+
+  // If we're in mobile mode, render a dedicated mobile story view (header + Tiles/Highlights buttons)
+  if (state && state.mobileMode) {
+    try { renderMobileStoryView(name); } catch (e) { console.warn('renderMobileStoryView failed', e); }
+    return;
+  }
+
   // show the concatenated tiles by default when opening a story (read-only full view)
   state.currentView = { type: 'full' };
   currentStoryTitle.textContent = name;
@@ -2702,6 +2709,271 @@ li.style.alignItems = 'center';
   }
 }
 
+/*
+  Mobile story view renderer:
+  - Header: story name
+  - Two large square buttons stacked vertically: Tiles (top), Highlights (bottom)
+  - Content area (#mobileStoryContent) used to show the selected list/preview
+  - Uses simple API calls to populate lists inline; tapping Back uses ensureMobileFooter behavior.
+*/
+function renderMobileStoryView(storyName) {
+  try {
+    // ensure mobileRoot exists
+    if (!document.getElementById('mobileRoot')) renderMobileRoot();
+    const root = document.getElementById('mobileRoot');
+    if (!root) return;
+
+    // clear and build header/body
+    root.innerHTML = '';
+
+    const header = document.createElement('header');
+    header.className = 'mobile-header';
+    header.style.display = 'flex';
+    header.style.alignItems = 'center';
+    header.style.justifyContent = 'center';
+    header.style.padding = '12px 8px';
+
+    const title = document.createElement('div');
+    title.textContent = storyName;
+    title.style.fontSize = '18px';
+    title.style.fontWeight = '700';
+    header.appendChild(title);
+    root.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'mobile-body';
+    body.style.display = 'flex';
+    body.style.flexDirection = 'column';
+    body.style.alignItems = 'center';
+    body.style.gap = '12px';
+    body.style.padding = '12px';
+
+    // buttons container
+    const btnWrap = document.createElement('div');
+    btnWrap.style.display = 'flex';
+    btnWrap.style.flexDirection = 'column';
+    btnWrap.style.gap = '12px';
+    btnWrap.style.width = '100%';
+    btnWrap.style.alignItems = 'center';
+
+    const tilesBtn = document.createElement('button');
+    tilesBtn.className = 'mobile-big-btn';
+    tilesBtn.textContent = 'Tiles';
+    tilesBtn.style.width = '84%';
+    tilesBtn.style.aspectRatio = '1 / 1';
+    tilesBtn.style.fontSize = '18px';
+    tilesBtn.style.display = 'flex';
+    tilesBtn.style.alignItems = 'center';
+    tilesBtn.style.justifyContent = 'center';
+    tilesBtn.addEventListener('click', async () => {
+      try {
+        const content = document.getElementById('mobileStoryContent');
+        if (!content) return;
+        content.innerHTML = '';
+        const h = document.createElement('div');
+        h.textContent = 'Loading tiles...';
+        h.className = 'small';
+        content.appendChild(h);
+        const res = await api.listTiles(storyName).catch(() => null);
+        content.innerHTML = '';
+        if (!res || !res.ok || !Array.isArray(res.tiles) || res.tiles.length === 0) {
+          const n = document.createElement('div');
+          n.textContent = 'No tiles';
+          n.className = 'small';
+          content.appendChild(n);
+          return;
+        }
+        const ul = document.createElement('ul');
+        ul.style.listStyle = 'none';
+        ul.style.padding = '0';
+        ul.style.margin = '0';
+        ul.style.width = '100%';
+        ul.style.display = 'flex';
+        ul.style.flexDirection = 'column';
+        ul.style.gap = '8px';
+        for (const t of res.tiles) {
+          const li = document.createElement('li');
+          li.style.padding = '10px';
+          li.style.border = '1px solid #eee';
+          li.style.borderRadius = '8';
+          li.style.background = '#fff';
+          li.style.display = 'flex';
+          li.style.justifyContent = 'space-between';
+          li.style.alignItems = 'center';
+
+          const left = document.createElement('div');
+          left.textContent = t.title || '(untitled)';
+          left.style.fontWeight = '600';
+          left.style.flex = '1';
+          left.style.minWidth = '0';
+          left.style.overflow = 'hidden';
+          left.style.textOverflow = 'ellipsis';
+          left.style.whiteSpace = 'nowrap';
+
+          const openBtn = document.createElement('button');
+          openBtn.textContent = 'Preview';
+          openBtn.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            content.innerHTML = '';
+            const p = document.createElement('div');
+            p.textContent = 'Loading...';
+            content.appendChild(p);
+            try {
+              const got = await api.getTile(storyName, t.id).catch(() => null);
+              content.innerHTML = '';
+              if (!got || !got.ok) {
+                const e = document.createElement('div');
+                e.textContent = 'Failed to load tile';
+                content.appendChild(e);
+                return;
+              }
+              const pre = document.createElement('pre');
+              pre.style.whiteSpace = 'pre-wrap';
+              pre.style.wordBreak = 'break-word';
+              pre.textContent = got.content || '';
+              content.appendChild(pre);
+            } catch (err) {
+              content.innerHTML = '';
+              const e = document.createElement('div');
+              e.textContent = 'Error loading tile';
+              content.appendChild(e);
+            }
+          });
+
+          li.appendChild(left);
+          li.appendChild(openBtn);
+          ul.appendChild(li);
+        }
+        content.appendChild(ul);
+      } catch (e) {
+        console.warn('renderMobileStoryView.tiles failed', e);
+      }
+    });
+
+    const hlBtn = document.createElement('button');
+    hlBtn.className = 'mobile-big-btn';
+    hlBtn.textContent = 'Highlights';
+    hlBtn.style.width = '84%';
+    hlBtn.style.aspectRatio = '1 / 1';
+    hlBtn.style.fontSize = '18px';
+    hlBtn.style.display = 'flex';
+    hlBtn.style.alignItems = 'center';
+    hlBtn.style.justifyContent = 'center';
+    hlBtn.addEventListener('click', async () => {
+      try {
+        const content = document.getElementById('mobileStoryContent');
+        if (!content) return;
+        content.innerHTML = '';
+        const h = document.createElement('div');
+        h.textContent = 'Loading highlights...';
+        h.className = 'small';
+        content.appendChild(h);
+        const res = await api.listHighlights(storyName).catch(() => null);
+        content.innerHTML = '';
+        if (!res || !res.ok || !Array.isArray(res.highlights) || res.highlights.length === 0) {
+          const n = document.createElement('div');
+          n.textContent = 'No highlights';
+          n.className = 'small';
+          content.appendChild(n);
+          return;
+        }
+        const ul = document.createElement('ul');
+        ul.style.listStyle = 'none';
+        ul.style.padding = '0';
+        ul.style.margin = '0';
+        ul.style.width = '100%';
+        ul.style.display = 'flex';
+        ul.style.flexDirection = 'column';
+        ul.style.gap = '8px';
+        for (const hmeta of res.highlights) {
+          const li = document.createElement('li');
+          li.style.padding = '10px';
+          li.style.border = '1px solid #eee';
+          li.style.borderRadius = '8px';
+          li.style.background = '#fff';
+          li.style.display = 'flex';
+          li.style.justifyContent = 'space-between';
+          li.style.alignItems = 'center';
+
+          const left = document.createElement('div');
+          left.textContent = hmeta.title || hmeta.id || '(untitled)';
+          left.style.fontWeight = '600';
+          left.style.flex = '1';
+          left.style.minWidth = '0';
+          left.style.overflow = 'hidden';
+          left.style.textOverflow = 'ellipsis';
+          left.style.whiteSpace = 'nowrap';
+
+          const openBtn = document.createElement('button');
+          openBtn.textContent = 'Preview';
+          openBtn.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            content.innerHTML = '';
+            const p = document.createElement('div');
+            p.textContent = 'Loading...';
+            content.appendChild(p);
+            try {
+              const got = await api.getHighlight(storyName, hmeta.id).catch(() => null);
+              content.innerHTML = '';
+              if (!got || !got.ok) {
+                const e = document.createElement('div');
+                e.textContent = 'Failed to load highlight';
+                content.appendChild(e);
+                return;
+              }
+              const pre = document.createElement('pre');
+              pre.style.whiteSpace = 'pre-wrap';
+              pre.style.wordBreak = 'break-word';
+              pre.textContent = got.content || '';
+              content.appendChild(pre);
+            } catch (err) {
+              content.innerHTML = '';
+              const e = document.createElement('div');
+              e.textContent = 'Error loading highlight';
+              content.appendChild(e);
+            }
+          });
+
+          li.appendChild(left);
+          li.appendChild(openBtn);
+          ul.appendChild(li);
+        }
+        content.appendChild(ul);
+      } catch (e) {
+        console.warn('renderMobileStoryView.highlights failed', e);
+      }
+    });
+
+    btnWrap.appendChild(tilesBtn);
+    btnWrap.appendChild(hlBtn);
+    body.appendChild(btnWrap);
+
+    // content area (list or preview)
+    const contentArea = document.createElement('div');
+    contentArea.id = 'mobileStoryContent';
+    contentArea.style.width = '100%';
+    contentArea.style.minHeight = '120px';
+    contentArea.style.marginTop = '8px';
+    body.appendChild(contentArea);
+
+    root.appendChild(body);
+
+    // ensure mobile footer updated
+    try {
+      const logoutBtnF = document.getElementById('logoutBtn');
+      const localLabelF = document.getElementById('localModeLabel');
+      const isAuthF = !!(logoutBtnF && logoutBtnF.style && logoutBtnF.style.display !== 'none');
+      const isLocalF = !!(localLabelF && localLabelF.style && localLabelF.style.display !== 'none');
+      ensureMobileFooter(isAuthF, isLocalF);
+    } catch (e) {}
+
+    // focus first button for accessibility
+    try { tilesBtn.focus(); } catch (e) {}
+  } catch (e) {
+    console.warn('renderMobileStoryView error', e);
+  }
+}
+
 function scheduleMobileModeUpdate(delay = 150) {
   if (_mobileModeDebounceTimer) clearTimeout(_mobileModeDebounceTimer);
   _mobileModeDebounceTimer = setTimeout(() => updateMobileMode(), delay);
@@ -3198,10 +3470,11 @@ function ensureMobileFooter(isAuth, isLocal) {
     backBtn.textContent = 'Back';
     backBtn.addEventListener('click', () => {
       try {
-        if (window.history && window.history.length > 1) window.history.back();
-        else window.location.href = '/';
+        // deterministically return to the in-app story list: close the current story and render the mobile root
+        try { closeCurrentStory(); } catch (e) {}
+        try { renderMobileRoot(); } catch (e) {}
       } catch (e) {
-        window.location.href = '/';
+        try { window.location.href = '/'; } catch (err) {}
       }
     });
     el.appendChild(backBtn);

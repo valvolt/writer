@@ -2558,10 +2558,15 @@ function updateMobileMode(threshold = MOBILE_THRESHOLD) {
 */
 function renderMobileRoot() {
   try {
-    // Avoid duplicate rendering
-    if (document.getElementById('mobileRoot')) return;
-    const root = document.createElement('div');
-    root.id = 'mobileRoot';
+    // Always (re)build mobile root so Back navigation works reliably.
+    let root = document.getElementById('mobileRoot');
+    if (!root) {
+      root = document.createElement('div');
+      root.id = 'mobileRoot';
+    } else {
+      // clear existing content so we can rebuild the create form + list
+      root.innerHTML = '';
+    }
     state.mobileScreen = 'list';
 
     // Header

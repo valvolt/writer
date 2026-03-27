@@ -3144,6 +3144,11 @@ async function renderMobileEntityEditor(type, storyName, id, title) {
 
     // expose mobile textarea globally so speech helpers insert into it
     mobileActiveTextarea = ta;
+    try {
+      ta.dataset.entityType = type;
+      ta.dataset.entityStory = storyName;
+      ta.dataset.entityId = id;
+    } catch (e) {}
 
     // autosave on input (debounced)
     let mobileAutosaveTimer = null;
@@ -3613,18 +3618,36 @@ function insertFinal(finalText) {
       renderPreview();
       try { scheduleAutoSave(200); } catch (e) {}
     } else {
-      // if mobile, trigger the mobile autosave immediately
+      // if mobile, trigger the mobile autosave immediately and persist speech-final text
       try {
         if (mobileActiveTextarea && mobileActiveTextarea === target) {
-          // emulate immediate save for speech-finalized text
+          // fire an input event so the existing autosave UI runs (shows Saving/Saved)
+          try { target.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
+
+          // best-effort immediate save for speech-final text using annotated dataset on the textarea
           (async () => {
             try {
               const content = target.value || '';
-              if (!state.currentStory || !id) return;
-              if (state.currentView && state.currentView.type) {
-                // decide based on id presence and type; call appropriate save API
+              const typ = target.dataset && target.dataset.entityType ? target.dataset.entityType : null;
+              const story = target.dataset && target.dataset.entityStory ? target.dataset.entityStory : null;
+              const eid = target.dataset && target.dataset.entityId ? target.dataset.entityId : null;
+              if (!typ || !story || !eid) return;
+              let res = null;
+              if (typ === 'tile') {
+                res = await api.saveTile(story, eid, content).catch(() => null);
+              } else {
+                res = await api.saveHighlight(story, eid, content).catch(() => null);
               }
-            } catch (e) {}
+              if (res && res.ok) {
+                try { await refreshEntityLists(); } catch (e) {}
+                try { await refreshMobileTilesList(story); } catch (e) {}
+                try { await refreshMobileHighlightsList(story); } catch (e) {}
+              } else {
+                console.warn('mobile speech save failed', res);
+              }
+            } catch (err) {
+              console.warn('mobile speech save error', err);
+            }
           })();
         }
       } catch (e) {}

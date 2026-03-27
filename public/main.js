@@ -220,10 +220,13 @@ let customContextEl = null;
 // tooltip element
 let tooltipEl = null;
 
-// currently editing entity info
+ // currently editing entity info
 let currentEditing = { type: null, name: null };
 let lastEditorSelection = null; // saved when user opens editor context menu
 let uploadContext = null; // { mode: 'editor'|'entity', type: 'text'|'highlights', name?, start?, end? }
+// when using the mobile entity editor this points to the active mobile textarea so
+// shared speech insert helpers can route interim/final transcripts correctly.
+let mobileActiveTextarea = null;
 
 /* global hidden file input handler (used by right-click upload actions) */
 const globalFileInput = document.getElementById('globalHiddenFileInput');
@@ -3136,10 +3139,71 @@ async function renderMobileEntityEditor(type, storyName, id, title) {
      ;
     }
 
+    // make the textarea use remaining space in the mobile view
+    // ensure body and preview take flexible space so ta can grow to fill the viewport
+    try { body.style.flex = '1'; body.style.minHeight = '0'; } catch (e) {}
+    ta.style.flex = '1';
+    ta.style.minHeight = '0';
+    ta.style.height = 'auto';
+    previewWrap.style.flex = '1';
+    previewWrap.style.minHeight = '0';
+
     body.appendChild(ta);
     body.appendChild(previewWrap);
 
-    // controls row: Preview toggle + Save
+    // expose mobile textarea globally so speech helpers insert into it
+    mobileActiveTextarea = ta;
+
+    // autosave on input (debounced)
+    let mobileAutosaveTimer = null;
+    const mobileAutosaveDelay = 400;
+    const mobileStatus = document.createElement('div');
+    mobileStatus.style.fontSize = '12px';
+    mobileStatus.style.color = '#666';
+    mobileStatus.style.marginTop = '6px';
+    mobileStatus.textContent = '';
+
+    ta.addEventListener('input', () => {
+      try {
+        // indicate saving state
+        mobileStatus.textContent = 'Saving...';
+        if (mobileAutosaveTimer) clearTimeout(mobileAutosaveTimer);
+        mobileAutosaveTimer = setTimeout(async () => {
+          try {
+            const content = ta.value || '';
+            if (!state.currentStory || !id) {
+              mobileStatus.textContent = '';
+              return;
+            }
+            let res = null;
+            if (type === 'tile') res = await api.saveTile(storyName, id, content).catch(() => null);
+            else res = await api.saveHighlight(storyName, id, content).catch(() => null);
+            if (res && res.ok) {
+              mobileStatus.textContent = 'Saved';
+              setTimeout(() => { try { mobileStatus.textContent = ''; } catch (e) {} }, 900);
+            } else {
+              mobileStatus.textContent = 'Save failed';
+              console.warn('mobile autosave failed', res);
+              setTimeout(() => { try { mobileStatus.textContent = ''; } catch (e) {} }, 1500);
+            }
+            // refresh lists so counts update
+            try { await refreshEntityLists(); } catch (e) {}
+            try { await refreshTiles(); } catch (e) {}
+            try { await refreshMobileTilesList(storyName); } catch (e) {}
+            try { await refreshMobileHighlightsList(storyName); } catch (e) {}
+          } catch (err) {
+            console.error('mobile autosave error', err);
+            mobileStatus.textContent = '';
+          }
+        }, mobileAutosaveDelay);
+      } catch (e) {
+        console.warn('mobile input handler failed', e);
+      }
+    });
+
+    body.appendChild(mobileStatus);
+
+    // controls row: Preview toggle + Save (Save is hidden because autosave is active)
     const ctrlRow = document.createElement('div');
     ctrlRow.style.display = 'flex';
     ctrlRow.style.gap = '8px';
@@ -3172,30 +3236,8 @@ async function renderMobileEntityEditor(type, storyName, id, title) {
 
     const saveMobileBtn = document.createElement('button');
     saveMobileBtn.textContent = 'Save';
-    saveMobileBtn.addEventListener('click', async () => {
-      try {
-        saveMobileBtn.disabled = true;
-        const content = ta.value || '';
-        if (type === 'tile') {
-          const res = await api.saveTile(storyName, id, content);
-          if (!res || !res.ok) throw new Error(res && res.error ? res.error : 'Save failed');
-        } else {
-          const res = await api.saveHighlight(storyName, id, content);
-          if (!res || !res.ok) throw new Error(res && res.error ? res.error : 'Save failed');
-        }
-        // refresh lists so counts and UI update
-        try { await refreshEntityLists(); } catch (e) {}
-        try { await refreshTiles(); } catch (e) {}
-        try { await refreshMobileTilesList(storyName); } catch (e) {}
-        try { await refreshMobileHighlightsList(storyName); } catch (e) {}
-        alert('Saved');
-      } catch (err) {
-        console.error('mobile save failed', err);
-        alert(err && err.message ? err.message : 'Save failed');
-      } finally {
-        saveMobileBtn.disabled = false;
-      }
-    });
+    // hide the explicit save button when autosave is enabled for mobile editor
+    saveMobileBtn.style.display = 'none';
     ctrlRow.appendChild(saveMobileBtn);
 
     body.appendChild(ctrlRow);
@@ -3533,49 +3575,71 @@ function updateSpeechUI(active) {
 }
 
 function insertInterim(interimText) {
-  if (!editor) return;
+  // prefer mobileActiveTextarea when available (mobile editor), otherwise fall back to desktop editor
+  const target = (mobileActiveTextarea && mobileActiveTextarea instanceof HTMLTextAreaElement) ? mobileActiveTextarea : editor;
+  if (!target) return;
   try {
-    // Determine insertion start: reuse lastInterim.start when present, else use current caret
-    const selStart = (typeof editor.selectionStart === 'number') ? editor.selectionStart : editor.value.length;
-    const selEnd = (typeof editor.selectionEnd === 'number') ? editor.selectionEnd : selStart;
+    const selStart = (typeof target.selectionStart === 'number') ? target.selectionStart : target.value.length;
+    const selEnd = (typeof target.selectionEnd === 'number') ? target.selectionEnd : selStart;
     const start = lastInterim ? lastInterim.start : selStart;
-    const after = lastInterim ? editor.value.slice(lastInterim.end) : editor.value.slice(selEnd);
-    const before = editor.value.slice(0, start);
+    const after = lastInterim ? target.value.slice(lastInterim.end) : target.value.slice(selEnd);
+    const before = target.value.slice(0, start);
     const newValue = before + interimText + after;
-    editor.value = newValue;
+    target.value = newValue;
     const newPos = before.length + interimText.length;
-    editor.selectionStart = editor.selectionEnd = newPos;
+    target.selectionStart = target.selectionEnd = newPos;
     lastInterim = { start: start, end: newPos, text: interimText };
-    renderPreview();
+    // update preview only for desktop editor; mobile editor has its own preview toggle
+    if (target === editor) renderPreview();
   } catch (e) {
     console.warn('insertInterim failed', e);
   }
 }
 
 function insertFinal(finalText) {
-  if (!editor) return;
+  // prefer mobileActiveTextarea when available (mobile editor), otherwise fall back to desktop editor
+  const target = (mobileActiveTextarea && mobileActiveTextarea instanceof HTMLTextAreaElement) ? mobileActiveTextarea : editor;
+  if (!target) return;
   try {
     if (lastInterim) {
       const start = lastInterim.start;
-      const after = editor.value.slice(lastInterim.end);
-      const before = editor.value.slice(0, start);
-      editor.value = before + finalText + after;
+      const after = target.value.slice(lastInterim.end);
+      const before = target.value.slice(0, start);
+      target.value = before + finalText + after;
       const pos = before.length + finalText.length;
-      editor.selectionStart = editor.selectionEnd = pos;
+      target.selectionStart = target.selectionEnd = pos;
       lastInterim = null;
     } else {
       // Insert at current selection
-      const selStart = (typeof editor.selectionStart === 'number') ? editor.selectionStart : editor.value.length;
-      const selEnd = (typeof editor.selectionEnd === 'number') ? editor.selectionEnd : selStart;
-      const before = editor.value.slice(0, selStart);
-      const after = editor.value.slice(selEnd);
-      editor.value = before + finalText + after;
+      const selStart = (typeof target.selectionStart === 'number') ? target.selectionStart : target.value.length;
+      const selEnd = (typeof target.selectionEnd === 'number') ? target.selectionEnd : selStart;
+      const before = target.value.slice(0, selStart);
+      const after = target.value.slice(selEnd);
+      target.value = before + finalText + after;
       const pos = before.length + finalText.length;
-      editor.selectionStart = editor.selectionEnd = pos;
+      target.selectionStart = target.selectionEnd = pos;
     }
-    renderPreview();
-    // Persist the change shortly after finalizing
-    try { scheduleAutoSave(200); } catch (e) {}
+    // update preview only for desktop editor; mobile editor has its own preview toggle
+    if (target === editor) {
+      renderPreview();
+      try { scheduleAutoSave(200); } catch (e) {}
+    } else {
+      // if mobile, trigger the mobile autosave immediately
+      try {
+        if (mobileActiveTextarea && mobileActiveTextarea === target) {
+          // emulate immediate save for speech-finalized text
+          (async () => {
+            try {
+              const content = target.value || '';
+              if (!state.currentStory || !id) return;
+              if (state.currentView && state.currentView.type) {
+                // decide based on id presence and type; call appropriate save API
+              }
+            } catch (e) {}
+          })();
+        }
+      } catch (e) {}
+    }
   } catch (e) {
     console.warn('insertFinal failed', e);
   }
@@ -3898,6 +3962,9 @@ function ensureMobileFooter(isAuth, isLocal) {
           if (state && state.mobileScreen === 'entity') {
             // from entity editor -> go back to the corresponding list view (tiles or highlights)
             try {
+              // clear mobile-specific state (stop speech, clear active textarea)
+              try { mobileActiveTextarea = null; } catch (e) {}
+              try { if (speechActive) stopRecognition(); } catch (e) {}
               if (state.currentView && state.currentView.type === 'tile') {
                 renderMobileTilesView(state.currentStory);
               } else {

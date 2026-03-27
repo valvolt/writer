@@ -3107,6 +3107,7 @@ function renderMobileHighlightsView(storyName) {
     ul.style.flexDirection = 'column';
     ul.style.gap = '8px';
     listWrap.appendChild(ul);
+    body.appendChild(listWrap);
 
     root.appendChild(body);
 

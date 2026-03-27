@@ -3063,18 +3063,26 @@ async function renderMobileEntityEditor(type, storyName, id, title) {
     updateMicBtn();
     micWrap.appendChild(micBtn);
 
-    // language select (reuse global speechLang if present, otherwise create a minimal one)
+    // language select: reuse global speechLang if present; otherwise create and populate from _speechLangs
     let langSelect = document.getElementById('speechLang');
     if (!langSelect) {
       langSelect = document.createElement('select');
       langSelect.id = 'speechLang';
-      const opts = [{ code: 'EN', locale: 'en-US' }, { code: 'FR', locale: 'fr-FR' }];
-      opts.forEach(l => {
+      // prefer the full language list when available
+      const langs = (typeof _speechLangs !== 'undefined' && Array.isArray(_speechLangs) && _speechLangs.length > 0)
+        ? _speechLangs
+        : [{ code: 'EN', locale: 'en-US' }, { code: 'FR', locale: 'fr-FR' }];
+      langs.forEach(l => {
         const o = document.createElement('option');
         o.value = l.locale;
-        o.textContent = l.code;
+        o.textContent = l.code || l.locale;
         langSelect.appendChild(o);
       });
+      // ensure global reference is set so other code (setEditorEnabled) control it
+      try { speechLang = langSelect; } catch (e) {}
+    } else {
+      // reuse existing element and keep global reference in sync
+      try { speechLang = langSelect; } catch (e) {}
     }
     langSelect.addEventListener('change', () => {
       try {
@@ -3084,7 +3092,14 @@ async function renderMobileEntityEditor(type, storyName, id, title) {
         }
       } catch (e) {}
     });
-    micWrap.appendChild(langSelect);
+    // append into the headerControls (preferred) so the select is visible in the fixed header;
+    // fall back to micWrap if headerControls isn't available for any reason.
+    try {
+      if (headerControls && header.appendChild) headerControls.appendChild(langSelect);
+      else micWrap.appendChild(langSelect);
+    } catch (e) {
+      micWrap.appendChild(langSelect);
+    }
 
     // place mic controls into the fixed header so they're always reachable
     try { headerControls.appendChild(micWrap); } catch (e) { body.appendChild(micWrap); }

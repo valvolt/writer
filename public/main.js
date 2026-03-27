@@ -2573,14 +2573,10 @@ function renderMobileRoot() {
     }
     state.mobileScreen = 'list';
 
-    // Header
-    const header = document.createElement('header');
-    header.className = 'mobile-header';
-    const title = document.createElement('div');
-    title.textContent = 'Story Writer';
-    title.style.fontSize = '18px';
-    title.style.fontWeight = '700';
-    header.appendChild(title);
+    // Header (fixed)
+    const { header, headerControls, setTitle, height: MOBILE_HEADER_HEIGHT } = createMobileHeader('Story Writer');
+    // hide header controls on the root list view
+    headerControls.style.display = 'none';
     root.appendChild(header);
 
     // Body (create form + list)
@@ -2735,10 +2731,25 @@ function renderMobileStoryView(storyName) {
 
     const header = document.createElement('header');
     header.className = 'mobile-header';
+    // make header fixed so controls (mic / preview) remain accessible while scrolling
+    header.style.position = 'fixed';
+    header.style.top = '0';
+    header.style.left = '0';
+    header.style.right = '0';
     header.style.display = 'flex';
     header.style.alignItems = 'center';
-    header.style.justifyContent = 'center';
-    header.style.padding = '12px 8px';
+    header.style.justifyContent = 'space-between';
+    header.style.padding = '10px 12px';
+    header.style.zIndex = '1000';
+    header.style.background = '#fff';
+    header.style.boxShadow = '0 1px 0 rgba(0,0,0,0.04)';
+
+    // right-side container for persistent controls (mic + preview)
+    const headerControls = document.createElement('div');
+    headerControls.style.display = 'flex';
+    headerControls.style.alignItems = 'center';
+    headerControls.style.gap = '8px';
+    header.appendChild(headerControls);
 
     const title = document.createElement('div');
     title.textContent = storyName;
@@ -2813,6 +2824,14 @@ function renderMobileStoryView(storyName) {
 
     root.appendChild(body);
 
+    // ensure body content not hidden behind fixed header
+    try {
+      const hh = typeof MOBILE_HEADER_HEIGHT !== 'undefined' ? MOBILE_HEADER_HEIGHT : 56;
+      body.style.paddingTop = hh + 'px';
+      body.style.overflow = 'auto';
+      body.style.maxHeight = `calc(100vh - ${hh}px)`;
+    } catch (e) {}
+
     // ensure mobile footer updated
     try {
       const logoutBtnF = document.getElementById('logoutBtn');
@@ -2844,18 +2863,8 @@ function renderMobileTilesView(storyName) {
     // clear and build header/body
     root.innerHTML = '';
 
-    const header = document.createElement('header');
-    header.className = 'mobile-header';
-    header.style.display = 'flex';
-    header.style.alignItems = 'center';
-    header.style.justifyContent = 'center';
-    header.style.padding = '12px 8px';
-
-    const title = document.createElement('div');
-    title.textContent = `${storyName} - Tiles`;
-    title.style.fontSize = '18px';
-    title.style.fontWeight = '700';
-    header.appendChild(title);
+    // Header (fixed)
+    const { header, headerControls, setTitle, height: MOBILE_HEADER_HEIGHT } = createMobileHeader(`${storyName} - Tiles`);
     root.appendChild(header);
 
     const body = document.createElement('div');
@@ -3018,18 +3027,8 @@ async function renderMobileEntityEditor(type, storyName, id, title) {
     // clear and build header/body
     root.innerHTML = '';
 
-    const header = document.createElement('header');
-    header.className = 'mobile-header';
-    header.style.display = 'flex';
-    header.style.alignItems = 'center';
-    header.style.justifyContent = 'center';
-    header.style.padding = '12px 8px';
-
-    const titleEl = document.createElement('div');
-    titleEl.textContent = `${storyName} - ${title}`;
-    titleEl.style.fontSize = '18px';
-    titleEl.style.fontWeight = '700';
-    header.appendChild(titleEl);
+    // Header (fixed)
+    const { header, headerControls, setTitle, height: MOBILE_HEADER_HEIGHT } = createMobileHeader(`${storyName} - ${title}`);
     root.appendChild(header);
 
     const body = document.createElement('div');
@@ -3087,7 +3086,8 @@ async function renderMobileEntityEditor(type, storyName, id, title) {
     });
     micWrap.appendChild(langSelect);
 
-    body.appendChild(micWrap);
+    // place mic controls into the fixed header so they're always reachable
+    try { headerControls.appendChild(micWrap); } catch (e) { body.appendChild(micWrap); }
 
     // editor textarea
     const ta = document.createElement('textarea');
@@ -3228,7 +3228,8 @@ async function renderMobileEntityEditor(type, storyName, id, title) {
         }
       } catch (e) { console.warn('mobile preview toggle failed', e); }
     });
-    ctrlRow.appendChild(previewBtn);
+    // move preview into the fixed header so it's always reachable without scrolling
+    try { headerControls.appendChild(previewBtn); } catch (e) { ctrlRow.appendChild(previewBtn); }
 
     const saveMobileBtn = document.createElement('button');
     saveMobileBtn.textContent = 'Save';
@@ -3239,6 +3240,14 @@ async function renderMobileEntityEditor(type, storyName, id, title) {
     body.appendChild(ctrlRow);
 
     root.appendChild(body);
+
+    // ensure body content not hidden behind fixed header
+    try {
+      const hh = typeof MOBILE_HEADER_HEIGHT !== 'undefined' ? MOBILE_HEADER_HEIGHT : 56;
+      body.style.paddingTop = hh + 'px';
+      body.style.overflow = 'auto';
+      body.style.maxHeight = `calc(100vh - ${hh}px)`;
+    } catch (e) {}
 
     // ensure mobile footer updated (recreate footer so Back works)
     try {
@@ -3446,6 +3455,54 @@ try {
   scheduleMobileModeUpdate(0);
 } catch (e) {
   console.warn('mobile mode init failed', e);
+}
+
+/* Mobile header helper
+   Creates a fixed header used by all mobile screens so controls (mic, preview, lang)
+   remain accessible while the content body scrolls underneath.
+   Returns: { header, headerControls, setTitle, height }
+*/
+function createMobileHeader(titleText) {
+  const header = document.createElement('header');
+  header.className = 'mobile-header';
+  header.style.position = 'fixed';
+  header.style.top = '0';
+  header.style.left = '0';
+  header.style.right = '0';
+  header.style.height = '56px';
+  header.style.display = 'flex';
+  header.style.alignItems = 'center';
+  header.style.justifyContent = 'space-between';
+  header.style.padding = '8px 12px';
+  header.style.zIndex = '1001';
+  header.style.background = '#fff';
+  header.style.boxShadow = '0 1px 0 rgba(0,0,0,0.04)';
+
+  const title = document.createElement('div');
+  title.textContent = titleText || '';
+  title.style.fontSize = '18px';
+  title.style.fontWeight = '700';
+  title.style.flex = '1';
+  title.style.minWidth = '0';
+  title.style.overflow = 'hidden';
+  title.style.textOverflow = 'ellipsis';
+  title.style.whiteSpace = 'nowrap';
+
+  const headerControls = document.createElement('div');
+  headerControls.style.display = 'flex';
+  headerControls.style.alignItems = 'center';
+  headerControls.style.gap = '8px';
+  headerControls.style.flex = '0 0 auto';
+
+  header.appendChild(title);
+  header.appendChild(headerControls);
+
+  return {
+    header,
+    headerControls,
+    setTitle: (t) => { try { title.textContent = t; } catch (e) {} },
+    height: 56
+  };
 }
 
 // --- Speech-to-text (Web Speech API) ---

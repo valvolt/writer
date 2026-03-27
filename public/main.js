@@ -2704,16 +2704,8 @@ li.style.alignItems = 'center';
         openStory(s.name);
       });
 
-      const openBtn = document.createElement('button');
-      openBtn.textContent = 'Open';
-      openBtn.style.marginLeft = '8px';
-      openBtn.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        openStory(s.name);
-      });
 
       li.appendChild(left);
-      li.appendChild(openBtn);
       ul.appendChild(li);
     }
         } catch (e) {
@@ -2993,9 +2985,9 @@ async function refreshMobileTilesList(storyName) {
       left.style.textOverflow = 'ellipsis';
       left.style.whiteSpace = 'nowrap';
 
-      const openBtn = document.createElement('button');
-      openBtn.textContent = 'Open';
-      openBtn.addEventListener('click', async (ev) => {
+      // make the left column tappable to open the tile (removes separate Open button)
+      left.style.cursor = 'pointer';
+      left.addEventListener('click', async (ev) => {
         ev.stopPropagation();
         try {
           await renderMobileEntityEditor('tile', storyName, t.id, t.title || '(untitled)');
@@ -3006,7 +2998,6 @@ async function refreshMobileTilesList(storyName) {
       });
 
       li.appendChild(left);
-      li.appendChild(openBtn);
       ul.appendChild(li);
     }
   } catch (e) {
@@ -3405,14 +3396,13 @@ async function refreshMobileHighlightsList(storyName) {
       left.style.textOverflow = 'ellipsis';
       left.style.whiteSpace = 'nowrap';
 
-      const openBtn = document.createElement('button');
-      openBtn.textContent = 'Open';
-      openBtn.addEventListener('click', async (ev) => {
+      // make the left column tappable to open the highlight (removes separate Open button)
+      left.style.cursor = 'pointer';
+      left.addEventListener('click', async (ev) => {
         ev.stopPropagation();
         try {
           const got = await api.getHighlight(storyName, hmeta.id).catch(() => null);
           if (!got || !got.ok) return alert(got && got.error ? got.error : 'Failed to load highlight');
-          // open the highlight in the mobile editor view
           await renderMobileEntityEditor('highlight', storyName, hmeta.id, got.title || hmeta.title || hmeta.id);
         } catch (err) {
           console.error('open highlight (mobile) failed', err);
@@ -3421,7 +3411,6 @@ async function refreshMobileHighlightsList(storyName) {
       });
 
       li.appendChild(left);
-      li.appendChild(openBtn);
       ul.appendChild(li);
     }
   } catch (e) {

@@ -2776,88 +2776,12 @@ function renderMobileStoryView(storyName) {
     tilesBtn.style.display = 'flex';
     tilesBtn.style.alignItems = 'center';
     tilesBtn.style.justifyContent = 'center';
-    tilesBtn.addEventListener('click', async () => {
+    tilesBtn.addEventListener('click', () => {
       try {
-        const content = document.getElementById('mobileStoryContent');
-        if (!content) return;
-        content.innerHTML = '';
-        const h = document.createElement('div');
-        h.textContent = 'Loading tiles...';
-        h.className = 'small';
-        content.appendChild(h);
-        const res = await api.listTiles(storyName).catch(() => null);
-        content.innerHTML = '';
-        if (!res || !res.ok || !Array.isArray(res.tiles) || res.tiles.length === 0) {
-          const n = document.createElement('div');
-          n.textContent = 'No tiles';
-          n.className = 'small';
-          content.appendChild(n);
-          return;
-        }
-        const ul = document.createElement('ul');
-        ul.style.listStyle = 'none';
-        ul.style.padding = '0';
-        ul.style.margin = '0';
-        ul.style.width = '100%';
-        ul.style.display = 'flex';
-        ul.style.flexDirection = 'column';
-        ul.style.gap = '8px';
-        for (const t of res.tiles) {
-          const li = document.createElement('li');
-          li.style.padding = '10px';
-          li.style.border = '1px solid #eee';
-          li.style.borderRadius = '8';
-          li.style.background = '#fff';
-          li.style.display = 'flex';
-          li.style.justifyContent = 'space-between';
-          li.style.alignItems = 'center';
-
-          const left = document.createElement('div');
-          left.textContent = t.title || '(untitled)';
-          left.style.fontWeight = '600';
-          left.style.flex = '1';
-          left.style.minWidth = '0';
-          left.style.overflow = 'hidden';
-          left.style.textOverflow = 'ellipsis';
-          left.style.whiteSpace = 'nowrap';
-
-          const openBtn = document.createElement('button');
-          openBtn.textContent = 'Preview';
-          openBtn.addEventListener('click', async (ev) => {
-            ev.stopPropagation();
-            content.innerHTML = '';
-            const p = document.createElement('div');
-            p.textContent = 'Loading...';
-            content.appendChild(p);
-            try {
-              const got = await api.getTile(storyName, t.id).catch(() => null);
-              content.innerHTML = '';
-              if (!got || !got.ok) {
-                const e = document.createElement('div');
-                e.textContent = 'Failed to load tile';
-                content.appendChild(e);
-                return;
-              }
-              const pre = document.createElement('pre');
-              pre.style.whiteSpace = 'pre-wrap';
-              pre.style.wordBreak = 'break-word';
-              pre.textContent = got.content || '';
-              content.appendChild(pre);
-            } catch (err) {
-              content.innerHTML = '';
-              const e = document.createElement('div');
-              e.textContent = 'Error loading tile';
-              content.appendChild(e);
-            }
-          });
-
-          li.appendChild(left);
-          li.appendChild(openBtn);
-          ul.appendChild(li);
-        }
-        content.appendChild(ul);
+        // Show a dedicated tiles screen for better mobile UX
+        renderMobileTilesView(storyName);
       } catch (e) {
-        console.warn('renderMobileStoryView.tiles failed', e);
+        console.warn('renderMobileStoryView -> renderMobileTilesView failed', e);
       }
     });
 
@@ -2982,6 +2906,190 @@ function renderMobileStoryView(storyName) {
     try { tilesBtn.focus(); } catch (e) {}
   } catch (e) {
     console.warn('renderMobileStoryView error', e);
+  }
+}
+
+/* Mobile Tiles screen renderer + helper
+   - Header: "<story> - Tiles"
+   - Main: create tile form + list of tiles (mobileTilesList)
+   - Footer: mobile Back handled by ensureMobileFooter (Back from tiles returns to chooser)
+*/
+function renderMobileTilesView(storyName) {
+  try {
+    if (!document.getElementById('mobileRoot')) renderMobileRoot();
+    const root = document.getElementById('mobileRoot');
+    if (!root) return;
+    state.mobileScreen = 'tiles';
+
+    // clear and build header/body
+    root.innerHTML = '';
+
+    const header = document.createElement('header');
+    header.className = 'mobile-header';
+    header.style.display = 'flex';
+    header.style.alignItems = 'center';
+    header.style.justifyContent = 'center';
+    header.style.padding = '12px 8px';
+
+    const title = document.createElement('div');
+    title.textContent = `${storyName} - Tiles`;
+    title.style.fontSize = '18px';
+    title.style.fontWeight = '700';
+    header.appendChild(title);
+    root.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'mobile-body';
+    body.style.display = 'flex';
+    body.style.flexDirection = 'column';
+    body.style.alignItems = 'center';
+    body.style.gap = '12px';
+    body.style.padding = '12px';
+
+    // create form
+    const form = document.createElement('div');
+    form.style.display = 'flex';
+    form.style.flexDirection = 'column';
+    form.style.width = '100%';
+    form.style.gap = '8px';
+    const input = document.createElement('input');
+    input.placeholder = 'New tile title';
+    input.id = 'mobileNewTileTitle';
+    input.style.padding = '10px';
+    input.style.borderRadius = '8px';
+    input.style.border = '1px solid #ddd';
+    input.style.width = '84%';
+    input.style.margin = '0 auto';
+    const createBtn = document.createElement('button');
+    createBtn.textContent = 'Create Tile';
+    createBtn.className = 'mobile-big-btn';
+    createBtn.style.width = '84%';
+    createBtn.style.margin = '0 auto';
+    createBtn.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      const titleVal = (input.value || '').trim();
+      if (!titleVal) return alert('Enter a tile title');
+      try {
+        const res = await api.createTile(storyName, titleVal, '');
+        if (!res || !res.ok) return alert(res && res.error ? res.error : 'Create failed');
+        input.value = '';
+        await refreshMobileTilesList(storyName);
+        // open the created tile in the editor flow to allow quick editing
+        if (res && res.id) {
+          // reuse existing behavior: set state and open tile content in editor
+          state.currentView = { type: 'tile', id: res.id };
+          const got = await api.getTile(storyName, res.id).catch(() => null);
+          if (got && got.ok) {
+            editor.value = got.content || '';
+            setEditorEnabled(true);
+            renderPreview();
+          }
+        }
+      } catch (err) {
+        console.error('create tile (mobile) failed', err);
+        alert('Create failed');
+      }
+    });
+
+    form.appendChild(input);
+    form.appendChild(createBtn);
+    body.appendChild(form);
+
+    // tiles list container
+    const listWrap = document.createElement('div');
+    listWrap.style.width = '100%';
+    listWrap.style.marginTop = '6px';
+    const ul = document.createElement('ul');
+    ul.id = 'mobileTilesList';
+    ul.style.listStyle = 'none';
+    ul.style.padding = '0';
+    ul.style.margin = '0';
+    ul.style.display = 'flex';
+    ul.style.flexDirection = 'column';
+    ul.style.gap = '8px';
+    listWrap.appendChild(ul);
+    body.appendChild(listWrap);
+
+    root.appendChild(body);
+
+    // ensure mobile footer updated
+    try {
+      const logoutBtnF = document.getElementById('logoutBtn');
+      const localLabelF = document.getElementById('localModeLabel');
+      const isAuthF = !!(logoutBtnF && logoutBtnF.style && logoutBtnF.style.display !== 'none');
+      const isLocalF = !!(localLabelF && localLabelF.style && localLabelF.style.display !== 'none');
+      ensureMobileFooter(isAuthF, isLocalF);
+    } catch (e) {}
+
+    // focus input for quick tile creation
+    try { input.focus(); } catch (e) {}
+
+    // populate list
+    refreshMobileTilesList(storyName);
+  } catch (e) {
+    console.warn('renderMobileTilesView error', e);
+  }
+}
+
+async function refreshMobileTilesList(storyName) {
+  try {
+    const ul = document.getElementById('mobileTilesList');
+    if (!ul) return;
+    ul.innerHTML = '';
+    const res = await api.listTiles(storyName).catch(() => null);
+    if (!res || !res.ok || !Array.isArray(res.tiles) || res.tiles.length === 0) {
+      const li = document.createElement('li');
+      li.style.padding = '12px';
+      li.style.border = '1px solid #eee';
+      li.style.borderRadius = '8px';
+      li.textContent = 'No tiles';
+      ul.appendChild(li);
+      return;
+    }
+    for (const t of res.tiles) {
+      const li = document.createElement('li');
+      li.style.padding = '10px';
+      li.style.border = '1px solid #eee';
+      li.style.borderRadius = '8px';
+      li.style.background = '#fff';
+      li.style.display = 'flex';
+      li.style.justifyContent = 'space-between';
+      li.style.alignItems = 'center';
+
+      const left = document.createElement('div');
+      left.textContent = t.title || '(untitled)';
+      left.style.fontWeight = '600';
+      left.style.flex = '1';
+      left.style.minWidth = '0';
+      left.style.overflow = 'hidden';
+      left.style.textOverflow = 'ellipsis';
+      left.style.whiteSpace = 'nowrap';
+
+      const openBtn = document.createElement('button');
+      openBtn.textContent = 'Open';
+      openBtn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        try {
+          // open tile in editor
+          const got = await api.getTile(storyName, t.id).catch(() => null);
+          if (!got || !got.ok) return alert(got && got.error ? got.error : 'Failed to load tile');
+          state.currentView = { type: 'tile', id: t.id };
+          editor.value = got.content || '';
+          try { currentStoryTitle.textContent = `${storyName} -t.title || '(untitled)'}`; } catch (e) {}
+          setEditorEnabled(true);
+          renderPreview();
+        } catch (err) {
+          console.error('open tile (mobile) failed', err);
+          alert('Failed to open tile');
+        }
+      });
+
+      li.appendChild(left);
+      li.appendChild(openBtn);
+      ul.appendChild(li);
+    }
+  } catch (e) {
+    console.warn('refreshMobileTilesList failed', e);
   }
 }
 
@@ -3483,6 +3591,11 @@ function ensureMobileFooter(isAuth, isLocal) {
       try {
         // navigation depends on which mobile screen is currently shown
         try {
+          if (state && state.mobileScreen === 'tiles') {
+            // from tiles view -> go back to story chooser (Tiles/Highlights)
+            try { renderMobileStoryView(state.currentStory); } catch (e) { try { renderMobileRoot(); } catch (err) {} }
+            return;
+          }
           if (state && state.mobileScreen === 'story') {
             // from story view -> go to story list
             try { closeCurrentStory(); } catch (e) {}

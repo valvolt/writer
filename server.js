@@ -1431,7 +1431,7 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
   <html>
   <head>
   <meta charset="utf-8"/>
- meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>${escapeHtml(userId)} / ${escapeHtml(storyId)}</title>
   <link rel="stylesheet" href="/write/style.css">
   <style>

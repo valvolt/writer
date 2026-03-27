@@ -2562,6 +2562,7 @@ function renderMobileRoot() {
     if (document.getElementById('mobileRoot')) return;
     const root = document.createElement('div');
     root.id = 'mobileRoot';
+    state.mobileScreen = 'list';
 
     // Header
     const header = document.createElement('header');
@@ -2638,6 +2639,8 @@ function renderMobileRoot() {
 
 async function populateMobileStoryList() {
   try {
+    // mark current mobile screen as the story list so Back navigation is deterministic
+    try { state.mobileScreen = 'list'; } catch (e) {}
     const ul = document.getElementById('mobileStoryList');
     if (!ul) return;
     ul.innerHTML = '';
@@ -2704,10 +2707,12 @@ li.style.alignItems = 'center';
       li.appendChild(openBtn);
       ul.appendChild(li);
     }
-  } catch (e) {
-    console.warn('populateMobileStoryList failed', e);
-  }
-}
+        } catch (e) {
+          // non-fatal
+        }
+      }
+      // leaving mobile mode: mark UI as top-level write-root so Back from list navigates predictably
+      try { state.mobileScreen = 'write-root'; } catch (e) {}
 
 /*
   Mobile story view renderer:
@@ -2722,6 +2727,7 @@ function renderMobileStoryView(storyName) {
     if (!document.getElementById('mobileRoot')) renderMobileRoot();
     const root = document.getElementById('mobileRoot');
     if (!root) return;
+    state.mobileScreen = 'story';
 
     // clear and build header/body
     root.innerHTML = '';
@@ -3470,9 +3476,24 @@ function ensureMobileFooter(isAuth, isLocal) {
     backBtn.textContent = 'Back';
     backBtn.addEventListener('click', () => {
       try {
-        // deterministically return to the in-app story list: close the current story and render the mobile root
-        try { closeCurrentStory(); } catch (e) {}
-        try { renderMobileRoot(); } catch (e) {}
+        // navigation depends on which mobile screen is currently shown
+        try {
+          if (state && state.mobileScreen === 'story') {
+            // from story view -> go to story list
+            try { closeCurrentStory(); } catch (e) {}
+            try { renderMobileRoot(); } catch (e) {}
+            return;
+          }
+          if (state && state.mobileScreen === 'list') {
+            // from story list -> go to the top-level write screen
+            try { window.location.href = '/'; } catch (e) {}
+            return;
+          }
+          // fallback: go to top-level
+          try { window.location.href = '/'; } catch (e) {}
+        } catch (e) {
+          try { window.location.href = '/'; } catch (err) {}
+        }
       } catch (e) {
         try { window.location.href = '/'; } catch (err) {}
       }

@@ -2995,14 +2995,7 @@ async function refreshMobileTilesList(storyName) {
       openBtn.addEventListener('click', async (ev) => {
         ev.stopPropagation();
         try {
-          // open tile in editor
-          const got = await api.getTile(storyName, t.id).catch(() => null);
-          if (!got || !got.ok) return alert(got && got.error ? got.error : 'Failed to load tile');
-          state.currentView = { type: 'tile', id: t.id };
-          editor.value = got.content || '';
-          try { currentStoryTitle.textContent = `${storyName} - ${t.title || '(untitled)'}`; } catch (e) {}
-          setEditorEnabled(true);
-          renderPreview();
+          await renderMobileEntityEditor('tile', storyName, t.id, t.title || '(untitled)');
         } catch (err) {
           console.error('open tile (mobile) failed', err);
           alert('Failed to open tile');
@@ -3018,6 +3011,212 @@ async function refreshMobileTilesList(storyName) {
   }
 }
 
+async function renderMobileEntityEditor(type, storyName, id, title) {
+  try {
+    if (!document.getElementById('mobileRoot')) renderMobileRoot();
+    const root = document.getElementById('mobileRoot');
+    if (!root) return;
+    // mark as entity screen so footer/back behavior can distinguish it
+    state.mobileScreen = 'entity';
+    // set currentView so other UI pieces know which entity is active
+    state.currentView = { type: (type === 'tile' ? 'tile' : 'highlight'), id: id };
+
+    // clear and build header/body
+    root.innerHTML = '';
+
+    const header = document.createElement('header');
+    header.className = 'mobile-header';
+    header.style.display = 'flex';
+    header.style.alignItems = 'center';
+    header.style.justifyContent = 'center';
+    header.style.padding = '12px 8px';
+
+    const titleEl = document.createElement('div');
+    titleEl.textContent = `${storyName} - ${title}`;
+    titleEl.style.fontSize = '18px';
+    titleEl.style.fontWeight = '700';
+    header.appendChild(titleEl);
+    root.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'mobile-body';
+    body.style.display = 'flex';
+    body.style.flexDirection = 'column';
+    body.style.alignItems = 'center';
+    body.style.gap = '12px';
+    body.style.padding = '12px';
+
+    // microphone controls (local mic button that reuses start/stop)
+    const micWrap = document.createElement('div');
+    micWrap.style.display = 'flex';
+    micWrap.style.gap = '8px';
+    micWrap.style.alignItems = 'center';
+
+    const micBtn = document.createElement('button');
+    micBtn.className = 'mobile-mic-btn';
+    const updateMicBtn = () => {
+      try {
+        micBtn.textContent = speechActive ? '🎙️● Stop' : '🎙️ Start';
+        micBtn.setAttribute('aria-pressed', String(!!speechActive));
+      } catch (e) {}
+    };
+    micBtn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      if (!speechActive) startRecognition();
+      else stopRecognition();
+      // small delay to allow recognition/onend to update speechActive
+      setTimeout(updateMicBtn, 100);
+    });
+    updateMicBtn();
+    micWrap.appendChild(micBtn);
+
+    // language select (reuse global speechLang if present, otherwise create a minimal one)
+    let langSelect = document.getElementById('speechLang');
+    if (!langSelect) {
+      langSelect = document.createElement('select');
+      langSelect.id = 'speechLang';
+      const opts = [{ code: 'EN', locale: 'en-US' }, { code: 'FR', locale: 'fr-FR' }];
+      opts.forEach(l => {
+        const o = document.createElement('option');
+        o.value = l.locale;
+        o.textContent = l.code;
+        langSelect.appendChild(o);
+      });
+    }
+    langSelect.addEventListener('change', () => {
+      try {
+        if (recognition) {
+          // change lang on next start
+          stopRecognition();
+        }
+      } catch (e) {}
+    });
+    micWrap.appendChild(langSelect);
+
+    body.appendChild(micWrap);
+
+    // editor textarea
+    const ta = document.createElement('textarea');
+    ta.style.width = '92%';
+    ta.style.minHeight = '220px';
+    ta.style.padding = '10px';
+    ta.style.borderRadius = '8px';
+    ta.style.border = '1px solid #ddd';
+    ta.value = '';
+
+    // preview container (hidden initially)
+    const previewWrap = document.createElement('div');
+    previewWrap.style.width = '92%';
+    previewWrap.style.minHeight = '200px';
+    previewWrap.style.display = 'none';
+    previewWrap.style.background = '#fff';
+    previewWrap.style.padding = '8px';
+    previewWrap.style.borderRadius = '8px';
+    previewWrap.style.border = '1px solid #eee';
+    previewWrap.id = 'mobileEntityPreview';
+
+    // load content from API
+    try {
+      let got = null;
+      if (type === 'tile') {
+        got = await api.getTile(storyName, id).catch(() => null);
+        if (!got || !got.ok) throw new Error(got && got.error ? got.error : 'Failed to load tile');
+        ta.value = got.content || '';
+      } else {
+        got = await api.getHighlight(storyName, id).catch(() => null);
+        if (!got || !got.ok) throw new Error(got && got.error ? got.error : 'Failed to load highlight');
+        ta.value = got.content || '';
+      }
+    } catch (err) {
+      console.error('renderMobileEntityEditor load failed', err);
+      alert('Failed to load content');
+      // fallback: go back to the correct list
+      if (type === 'tile') renderMobileTilesView(storyName);
+      else renderMobileHighlightsView(storyName);
+     ;
+    }
+
+    body.appendChild(ta);
+    body.appendChild(previewWrap);
+
+    // controls row: Preview toggle + Save
+    const ctrlRow = document.createElement('div');
+    ctrlRow.style.display = 'flex';
+    ctrlRow.style.gap = '8px';
+    ctrlRow.style.justifyContent = 'center';
+    ctrlRow.style.width = '100%';
+
+    const previewBtn = document.createElement('button');
+    previewBtn.textContent = 'Preview';
+    let showingPreview = false;
+    previewBtn.addEventListener('click', () => {
+      try {
+        if (!showingPreview) {
+          // render markdown into previewWrap
+          const html = simpleMarkdownToHtml(ta.value || '');
+          previewWrap.innerHTML = html || '<div class="empty-preview">[preview empty]</div>';
+          try { renderTags(previewWrap); } catch (e) {}
+          previewWrap.style.display = 'block';
+          ta.style.display = 'none';
+          previewBtn.textContent = 'Edit';
+          showingPreview = true;
+        } else {
+          previewWrap.style.display = 'none';
+          ta.style.display = 'block';
+          previewBtn.textContent = 'Preview';
+          showingPreview = false;
+        }
+      } catch (e) { console.warn('mobile preview toggle failed', e); }
+    });
+    ctrlRow.appendChild(previewBtn);
+
+    const saveMobileBtn = document.createElement('button');
+    saveMobileBtn.textContent = 'Save';
+    saveMobileBtn.addEventListener('click', async () => {
+      try {
+        saveMobileBtn.disabled = true;
+        const content = ta.value || '';
+        if (type === 'tile') {
+          const res = await api.saveTile(storyName, id, content);
+          if (!res || !res.ok) throw new Error(res && res.error ? res.error : 'Save failed');
+        } else {
+          const res = await api.saveHighlight(storyName, id, content);
+          if (!res || !res.ok) throw new Error(res && res.error ? res.error : 'Save failed');
+        }
+        // refresh lists so counts and UI update
+        try { await refreshEntityLists(); } catch (e) {}
+        try { await refreshTiles(); } catch (e) {}
+        try { await refreshMobileTilesList(storyName); } catch (e) {}
+        try { await refreshMobileHighlightsList(storyName); } catch (e) {}
+        alert('Saved');
+      } catch (err) {
+        console.error('mobile save failed', err);
+        alert(err && err.message ? err.message : 'Save failed');
+      } finally {
+        saveMobileBtn.disabled = false;
+      }
+    });
+    ctrlRow.appendChild(saveMobileBtn);
+
+    body.appendChild(ctrlRow);
+
+    root.appendChild(body);
+
+    // ensure mobile footer updated (recreate footer so Back works)
+    try {
+      const logoutBtnF = document.getElementById('logoutBtn');
+      const localLabelF = document.getElementById('localModeLabel');
+      const isAuthF = !!(logoutBtnF && logoutBtnF.style && logoutBtnF.style.display !== 'none');
+      const isLocalF = !!(localLabelF && localLabelF.style && localLabelF.style.display !== 'none');
+      ensureMobileFooter(isAuthF, isLocalF);
+    } catch (e) {}
+
+    // focus textarea for editing
+    try { ta.focus(); } catch (e) {}
+  } catch (e) {
+    console.error('renderMobileEntityEditor failed', e);
+  }
+}
 /* Mobile Highlights screen renderer + helper
    - Header: "<story> - Highlights"
    - Main: create highlight form + list of highlights (mobileHighlightsList)
@@ -3171,8 +3370,8 @@ async function refreshMobileHighlightsList(storyName) {
         try {
           const got = await api.getHighlight(storyName, hmeta.id).catch(() => null);
           if (!got || !got.ok) return alert(got && got.error ? got.error : 'Failed to load highlight');
-          // open the highlight in the editor view
-          await openEntityInEditor('highlights', hmeta.id, got.title || hmeta.title || hmeta.id);
+          // open the highlight in the mobile editor view
+          await renderMobileEntityEditor('highlight', storyName, hmeta.id, got.title || hmeta.title || hmeta.id);
         } catch (err) {
           console.error('open highlight (mobile) failed', err);
           alert('Failed to open highlight');
@@ -3694,6 +3893,17 @@ function ensureMobileFooter(isAuth, isLocal) {
           if (state && state.mobileScreen === 'highlights') {
             // from highlights view -> go back to story chooser
             try { renderMobileStoryView(state.currentStory); } catch (e) { try { renderMobileRoot(); } catch (err) {} }
+            return;
+          }
+          if (state && state.mobileScreen === 'entity') {
+            // from entity editor -> go back to the corresponding list view (tiles or highlights)
+            try {
+              if (state.currentView && state.currentView.type === 'tile') {
+                renderMobileTilesView(state.currentStory);
+              } else {
+                renderMobileHighlightsView(state.currentStory);
+              }
+            } catch (e) { try { renderMobileRoot(); } catch (err) {} }
             return;
           }
           if (state && state.mobileScreen === 'story') {

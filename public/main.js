@@ -220,10 +220,13 @@ let customContextEl = null;
 // tooltip element
 let tooltipEl = null;
 
-// currently editing entity info
+ // currently editing entity info
 let currentEditing = { type: null, name: null };
 let lastEditorSelection = null; // saved when user opens editor context menu
 let uploadContext = null; // { mode: 'editor'|'entity', type: 'text'|'highlights', name?, start?, end? }
+// when using the mobile entity editor this points to the active mobile textarea so
+// shared speech insert helpers can route interim/final transcripts correctly.
+let mobileActiveTextarea = null;
 
 /* global hidden file input handler (used by right-click upload actions) */
 const globalFileInput = document.getElementById('globalHiddenFileInput');
@@ -618,7 +621,7 @@ function simpleMarkdownToHtml(md) {
         if (liOpenStack.pop()) html += '</li>';
         html += '</ul>';
         listStack.pop();
-        if (Task) { html += '<ul class="task-list">'; listStack.push('task'); liOpenStack.push(false); }
+        if (isTask) { html += '<ul class="task-list">'; listStack.push('task'); liOpenStack.push(false); }
         else { html += '<ul>'; listStack.push('normal'); liOpenStack.push(false); }
       }
 
@@ -680,7 +683,8 @@ function simpleMarkdownToHtml(md) {
 function sanitizeForCounting(text) {
   if (!text || typeof text !== 'string') return '';
   // remove markdown images: ![alt](url)
-  let s = text.replace(/!\[[^\]]*]\)]*\)/g, ' ');
+  // robust pattern: match `![...](...)`
+  let s = text.replace(/!\[[^\]]*\]\([^\)]*\)/g, ' ');
   // remove tags like #keyword (allow accented letters in tags)
   s = s.replace(/#[\p{L}\p{N}_-]+/gu, ' ');
   // normalize whitespace
@@ -969,6 +973,13 @@ async function openStory(name) {
   }
   state.currentStory = name;
   state.storyData = res;
+
+  // If we're in mobile mode, render a dedicated mobile story view (header + Tiles/Highlights buttons)
+  if (state && state.mobileMode) {
+    try { renderMobileStoryView(name); } catch (e) { console.warn('renderMobileStoryView failed', e); }
+    return;
+  }
+
   // show the concatenated tiles by default when opening a story (read-only full view)
   state.currentView = { type: 'full' };
   currentStoryTitle.textContent = name;
@@ -1006,6 +1017,13 @@ async function openStory(name) {
         ? (marked.parse(combined || ''))
         : simpleMarkdownToHtml(combined || '');
       preview.innerHTML = html || '<div class="empty-preview">[no tiles]</div>';
+      try {
+        const logoutBtnF = document.getElementById('logoutBtn');
+        const localLabelF = document.getElementById('localModeLabel');
+        const isAuthF = !!(logoutBtnF && logoutBtnF.style && logoutBtnF.style.display !== 'none');
+        const isLocalF = !!(localLabelF && localLabelF.style && localLabelF.style.display !== 'none');
+        ensureMobileFooter(isAuthF, isLocalF);
+      } catch (e) {}
     } else {
       // fallback to showing text.md preview if tiles unavailable
       editor.value = res.text || '';
@@ -2458,6 +2476,1058 @@ preview.addEventListener('contextmenu', (ev) => {
 
  // initial load
 
+/* --- Mobile mode detection ---
+   Mobile mode is true when:
+     - viewport height is greater than width (portrait)
+     - and viewport width is smaller than MOBILE_THRESHOLD (px)
+
+   Behavior:
+   - updates state.mobileMode
+   - toggles body.mobile-mode class
+   - exposes window._storyWriter.mobileMode and window._storyWriter.updateMobileMode
+   - debounced on resize/orientation/visualViewport changes
+*/
+const MOBILE_THRESHOLD = 640;
+
+function computeMobileMode(threshold = MOBILE_THRESHOLD) {
+  try {
+    // Allow forcing mobile mode for testing via URL (?mobile=1) or localStorage ('forceMobile' === '1').
+    try {
+      const params = (typeof URLSearchParams !== 'undefined') ? new URLSearchParams(window.location.search) : null;
+      if (params && params.get && params.get('mobile') === '1') return true;
+    } catch (e) {}
+    try {
+      if (localStorage && localStorage.getItem && localStorage.getItem('forceMobile') === '1') return true;
+    } catch (e) {}
+    return (window.innerHeight > window.innerWidth) && (window.innerWidth < threshold);
+  } catch (e) {
+    return false;
+  }
+}
+
+let _mobileModeDebounceTimer = null;
+function updateMobileMode(threshold = MOBILE_THRESHOLD) {
+  try {
+    const isMobile = computeMobileMode(threshold);
+    if (state && state.mobileMode === isMobile) return isMobile;
+    if (state) state.mobileMode = isMobile;
+    try {
+      if (isMobile) document.body.classList.add('mobile-mode');
+      else document.body.classList.remove('mobile-mode');
+    } catch (e) {}
+    window._storyWriter = window._storyWriter || {};
+    window._storyWriter.mobileMode = !!isMobile;
+
+    try {
+      const logoutBtn3 = document.getElementById('logoutBtn');
+      const localLabel3 = document.getElementById('localModeLabel');
+      const isAuthNow3 = !!(logoutBtn3 && logoutBtn3.style && logoutBtn3.style.display !== 'none');
+      const isLocalNow3 = !!(localLabel3 && localLabel3.style && localLabel3.style.display !== 'none');
+
+      // Ensure the standard mobile footer is present/updated
+      ensureMobileFooter(isAuthNow3, isLocalNow3);
+
+      // If entering mobile mode, render a dedicated mobile-first "Write" view
+      if (isMobile) {
+        try {
+          // Only render mobile root if not already present
+          if (!document.getElementById('mobileRoot')) {
+            renderMobileRoot(); // builds header, create form, and mobile story list
+          } else {
+            // refresh story list contents if already rendered
+            populateMobileStoryList();
+            // focus input for a smooth mobile flow
+            const inp = document.querySelector('#mobileRoot input[name="mobileNewStory"]');
+            if (inp) try { inp.focus(); } catch (e) {}
+          }
+        } catch (e) {
+          console.warn('renderMobileRoot failed', e);
+        }
+      } else {
+        // leaving mobile mode: remove mobileRoot if present to restore desktop DOM
+        try {
+          const mr = document.getElementById('mobileRoot');
+          if (mr && mr.parentNode) mr.parentNode.removeChild(mr);
+        } catch (e) {
+          // non-fatal
+        }
+      }
+    } catch (e) {}
+
+    return isMobile;
+  } catch (e) {
+    console.warn('updateMobileMode failed', e);
+    return false;
+  }
+}
+
+/*
+  Mobile renderer: renderMobileRoot() builds a simple stacked mobile UI showing:
+   - Header "Story Writer"
+   - Create story input + button
+   - List of existing stories (id: mobileStoryList)
+  populateMobileStoryList() refreshes the list from the API.
+*/
+function renderMobileRoot() {
+  try {
+    // Always (re)build mobile root so Back navigation works reliably.
+    let root = document.getElementById('mobileRoot');
+    if (!root) {
+      root = document.createElement('div');
+      root.id = 'mobileRoot';
+    } else {
+      // clear existing content so we can rebuild the create form + list
+      root.innerHTML = '';
+    }
+    state.mobileScreen = 'list';
+
+    // Header (fixed)
+    const { header, headerControls, setTitle, height: MOBILE_HEADER_HEIGHT } = createMobileHeader('Story Writer');
+    // hide header controls on the root list view
+    headerControls.style.display = 'none';
+    root.appendChild(header);
+
+    // Body (create form + list)
+    const body = document.createElement('div');
+    body.className = 'mobile-body';
+
+    // Create form
+    const form = document.createElement('div');
+    form.className = 'mobile-form';
+    const input = document.createElement('input');
+    input.name = 'mobileNewStory';
+    input.placeholder = 'New story name';
+    input.style.padding = '10px';
+    input.style.borderRadius = '8px';
+    input.style.border = '1px solid #ddd';
+    const btn = document.createElement('button');
+    btn.textContent = 'Create';
+    btn.className = 'mobile-big-btn';
+    btn.style.padding = '10px 12px';
+    btn.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      const name = (input.value || '').trim();
+      if (!name) return alert('Enter a story name');
+      try {
+        const res = await api.createStory(name);
+        if (!res || !res.ok) return alert(res && res.error ? res.error : 'Create failed');
+        input.value = '';
+        await populateMobileStoryList();
+        // open story after creation for quick flow
+        openStory(res.name);
+      } catch (err) {
+        console.error('mobile create story failed', err);
+        alert('Create failed');
+      }
+    });
+    form.appendChild(input);
+    form.appendChild(btn);
+    body.appendChild(form);
+
+    // Stories list container
+    const ul = document.createElement('ul');
+    ul.id = 'mobileStoryList';
+    ul.style.listStyle = 'none';
+    ul.style.padding = '0';
+    ul.style.margin = '12px 0';
+    ul.style.display = 'flex';
+    ul.style.flexDirection = 'column';
+    ul.style.gap = '8px';
+    body.appendChild(ul);
+
+    root.appendChild(body);
+
+    // Insert mobile root at top of body so footer remains at bottom
+    document.body.insertBefore(root, document.body.firstChild);
+
+    // Focus input for immediate typing on mobile
+    try { input.focus(); } catch (e) {}
+
+    // populate list initially
+    populateMobileStoryList();
+  } catch (e) {
+    console.warn('renderMobileRoot error', e);
+  }
+}
+
+async function populateMobileStoryList() {
+  try {
+    // mark current mobile screen as the story list so Back navigation is deterministic
+    try { state.mobileScreen = 'list'; } catch (e) {}
+    const ul = document.getElementById('mobileStoryList');
+    if (!ul) return;
+    ul.innerHTML = '';
+    const res = await api.listStories().catch(() => null);
+    if (!res || !res.ok) {
+      // show an empty state
+      const li = document.createElement('li');
+      li.style.padding = '12px';
+      li.style.border = '1px solid #eee';
+      li.style.borderRadius = '8px';
+      li.textContent = 'No stories';
+      ul.appendChild(li);
+      return;
+    }
+    const stories = (res.stories || []).map(s => {
+      const id = (typeof s === 'string') ? s : (s.id || s.name || '');
+      const name = (typeof s === 'string') ? s : (s.name || s.id || '');
+      return { id, name };
+    }).sort((a, b) => a.name.localeCompare(b.name));
+
+    if (stories.length === 0) {
+      const li = document.createElement('li');
+      li.style.padding = '12px';
+      li.style.border = '1px solid #eee';
+      li.style.borderRadius = '8px';
+      li.textContent = 'No stories';
+      ul.appendChild(li);
+      return;
+    }
+
+    for (const s of stories) {
+      const li = document.createElement('li');
+      li.style.padding = '12px';
+      li.style.border = '1px solid #eee';
+li.style.borderRadius = '8px';
+li.style.background = '#fafafa';
+      li.style.display = 'flex';
+li.style.justifyContent = 'space-between';
+li.style.alignItems = 'center';
+
+      const left = document.createElement('div');
+      left.style.flex = '1';
+      left.style.minWidth = '0';
+      left.textContent = s.name;
+      left.style.fontWeight = '600';
+      left.style.overflow = 'hidden';
+      left.style.textOverflow = 'ellipsis';
+      left.style.whiteSpace = 'nowrap';
+      left.style.marginRight = '8px';
+      left.addEventListener('click', () => {
+        // emulate tapping to story
+        openStory(s.name);
+      });
+
+
+      li.appendChild(left);
+      ul.appendChild(li);
+    }
+        } catch (e) {
+          // non-fatal
+        }
+      }
+      // leaving mobile mode: mark UI as top-level write-root so Back from list navigates predictably
+      try { state.mobileScreen = 'write-root'; } catch (e) {}
+
+/*
+  Mobile story view renderer:
+  - Header: story name
+  - Two large square buttons stacked vertically: Tiles (top), Highlights (bottom)
+  - Content area (#mobileStoryContent) used to show the selected list/preview
+  - Uses simple API calls to populate lists inline; tapping Back uses ensureMobileFooter behavior.
+*/
+function renderMobileStoryView(storyName) {
+  try {
+    // ensure mobileRoot exists
+    if (!document.getElementById('mobileRoot')) renderMobileRoot();
+    const root = document.getElementById('mobileRoot');
+    if (!root) return;
+    state.mobileScreen = 'story';
+
+    // clear and build header/body
+    root.innerHTML = '';
+
+    const header = document.createElement('header');
+    header.className = 'mobile-header';
+    // make header fixed so controls (mic / preview) remain accessible while scrolling
+    header.style.position = 'fixed';
+    header.style.top = '0';
+    header.style.left = '0';
+    header.style.right = '0';
+    header.style.display = 'flex';
+    header.style.alignItems = 'center';
+    header.style.justifyContent = 'space-between';
+    header.style.padding = '10px 12px';
+    header.style.zIndex = '1000';
+    header.style.background = '#fff';
+    header.style.boxShadow = '0 1px 0 rgba(0,0,0,0.04)';
+
+    // right-side container for persistent controls (mic + preview)
+    const headerControls = document.createElement('div');
+    headerControls.style.display = 'flex';
+    headerControls.style.alignItems = 'center';
+    headerControls.style.gap = '8px';
+    header.appendChild(headerControls);
+
+    const title = document.createElement('div');
+    title.textContent = storyName;
+    title.style.fontSize = '18px';
+    title.style.fontWeight = '700';
+    header.appendChild(title);
+    root.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'mobile-body';
+    body.style.display = 'flex';
+    body.style.flexDirection = 'column';
+    body.style.alignItems = 'center';
+    body.style.gap = '12px';
+    body.style.padding = '12px';
+
+    // buttons container
+    const btnWrap = document.createElement('div');
+    btnWrap.style.display = 'flex';
+    btnWrap.style.flexDirection = 'column';
+    btnWrap.style.gap = '12px';
+    btnWrap.style.width = '100%';
+    btnWrap.style.alignItems = 'center';
+
+    const tilesBtn = document.createElement('button');
+    tilesBtn.className = 'mobile-big-btn';
+    tilesBtn.textContent = 'Tiles';
+    tilesBtn.style.width = '84%';
+    tilesBtn.style.aspectRatio = '1 / 1';
+    tilesBtn.style.fontSize = '18px';
+    tilesBtn.style.display = 'flex';
+    tilesBtn.style.alignItems = 'center';
+    tilesBtn.style.justifyContent = 'center';
+    tilesBtn.addEventListener('click', () => {
+      try {
+        // Show a dedicated tiles screen for better mobile UX
+        renderMobileTilesView(storyName);
+      } catch (e) {
+        console.warn('renderMobileStoryView -> renderMobileTilesView failed', e);
+      }
+    });
+
+    const hlBtn = document.createElement('button');
+    hlBtn.className = 'mobile-big-btn';
+    hlBtn.textContent = 'Highlights';
+    hlBtn.style.width = '84%';
+    hlBtn.style.aspectRatio = '1 / 1';
+    hlBtn.style.fontSize = '18px';
+    hlBtn.style.display = 'flex';
+    hlBtn.style.alignItems = 'center';
+    hlBtn.style.justifyContent = 'center';
+    hlBtn.addEventListener('click', () => {
+      try {
+        // Show a dedicated highlights screen for better mobile UX
+        renderMobileHighlightsView(storyName);
+      } catch (e) {
+        console.warn('renderMobileStoryView -> renderMobileHighlightsView failed', e);
+      }
+    });
+
+    btnWrap.appendChild(tilesBtn);
+    btnWrap.appendChild(hlBtn);
+    body.appendChild(btnWrap);
+
+    // content area (list or preview)
+    const contentArea = document.createElement('div');
+    contentArea.id = 'mobileStoryContent';
+    contentArea.style.width = '100%';
+    contentArea.style.minHeight = '120px';
+    contentArea.style.marginTop = '8px';
+    body.appendChild(contentArea);
+
+    root.appendChild(body);
+
+    // ensure body content not hidden behind fixed header
+    try {
+      const hh = typeof MOBILE_HEADER_HEIGHT !== 'undefined' ? MOBILE_HEADER_HEIGHT : 56;
+      body.style.paddingTop = hh + 'px';
+      body.style.overflow = 'auto';
+      body.style.maxHeight = `calc(100vh - ${hh}px)`;
+    } catch (e) {}
+
+    // ensure mobile footer updated
+    try {
+      const logoutBtnF = document.getElementById('logoutBtn');
+      const localLabelF = document.getElementById('localModeLabel');
+      const isAuthF = !!(logoutBtnF && logoutBtnF.style && logoutBtnF.style.display !== 'none');
+      const isLocalF = !!(localLabelF && localLabelF.style && localLabelF.style.display !== 'none');
+      ensureMobileFooter(isAuthF, isLocalF);
+    } catch (e) {}
+
+    // focus first button for accessibility
+    try { tilesBtn.focus(); } catch (e) {}
+  } catch (e) {
+    console.warn('renderMobileStoryView error', e);
+  }
+}
+
+/* Mobile Tiles screen renderer + helper
+   - Header: "<story> - Tiles"
+   - Main: create tile form + list of tiles (mobileTilesList)
+   - Footer: mobile Back handled by ensureMobileFooter (Back from tiles returns to chooser)
+*/
+function renderMobileTilesView(storyName) {
+  try {
+    if (!document.getElementById('mobileRoot')) renderMobileRoot();
+    const root = document.getElementById('mobileRoot');
+    if (!root) return;
+    state.mobileScreen = 'tiles';
+
+    // clear and build header/body
+    root.innerHTML = '';
+
+    // Header (fixed)
+    const { header, headerControls, setTitle, height: MOBILE_HEADER_HEIGHT } = createMobileHeader(`${storyName} - Tiles`);
+    root.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'mobile-body';
+    body.style.display = 'flex';
+    body.style.flexDirection = 'column';
+    body.style.alignItems = 'center';
+    body.style.gap = '12px';
+    body.style.padding = '12px';
+
+    // create form
+    const form = document.createElement('div');
+    form.style.display = 'flex';
+    form.style.flexDirection = 'column';
+    form.style.width = '100%';
+    form.style.gap = '8px';
+    const input = document.createElement('input');
+    input.placeholder = 'New tile title';
+    input.id = 'mobileNewTileTitle';
+    input.style.padding = '10px';
+    input.style.borderRadius = '8px';
+    input.style.border = '1px solid #ddd';
+    input.style.width = '84%';
+    input.style.margin = '0 auto';
+    const createBtn = document.createElement('button');
+    createBtn.textContent = 'Create Tile';
+    createBtn.className = 'mobile-big-btn';
+    createBtn.style.width = '84%';
+    createBtn.style.margin = '0 auto';
+    createBtn.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      const titleVal = (input.value || '').trim();
+      if (!titleVal) return alert('Enter a tile title');
+      try {
+        const res = await api.createTile(storyName, titleVal, '');
+        if (!res || !res.ok) return alert(res && res.error ? res.error : 'Create failed');
+        input.value = '';
+        await refreshMobileTilesList(storyName);
+        // open the created tile in the editor flow to allow quick editing
+        if (res && res.id) {
+          // reuse existing behavior: set state and open tile content in editor
+          state.currentView = { type: 'tile', id: res.id };
+          const got = await api.getTile(storyName, res.id).catch(() => null);
+          if (got && got.ok) {
+            editor.value = got.content || '';
+            setEditorEnabled(true);
+            renderPreview();
+          }
+        }
+      } catch (err) {
+        console.error('create tile (mobile) failed', err);
+        alert('Create failed');
+      }
+    });
+
+    form.appendChild(input);
+    form.appendChild(createBtn);
+    body.appendChild(form);
+
+    // tiles list container
+    const listWrap = document.createElement('div');
+    listWrap.style.width = '100%';
+    listWrap.style.marginTop = '6px';
+    const ul = document.createElement('ul');
+    ul.id = 'mobileTilesList';
+    ul.style.listStyle = 'none';
+    ul.style.padding = '0';
+    ul.style.margin = '0';
+    ul.style.display = 'flex';
+    ul.style.flexDirection = 'column';
+    ul.style.gap = '8px';
+    listWrap.appendChild(ul);
+    body.appendChild(listWrap);
+
+    root.appendChild(body);
+
+    // ensure mobile footer updated
+    try {
+      const logoutBtnF = document.getElementById('logoutBtn');
+      const localLabelF = document.getElementById('localModeLabel');
+      const isAuthF = !!(logoutBtnF && logoutBtnF.style && logoutBtnF.style.display !== 'none');
+      const isLocalF = !!(localLabelF && localLabelF.style && localLabelF.style.display !== 'none');
+      ensureMobileFooter(isAuthF, isLocalF);
+    } catch (e) {}
+
+    // focus input for quick tile creation
+    try { input.focus(); } catch (e) {}
+
+    // populate list
+    refreshMobileTilesList(storyName);
+  } catch (e) {
+    console.warn('renderMobileTilesView error', e);
+  }
+}
+
+async function refreshMobileTilesList(storyName) {
+  try {
+    const ul = document.getElementById('mobileTilesList');
+    if (!ul) return;
+    ul.innerHTML = '';
+    const res = await api.listTiles(storyName).catch(() => null);
+    if (!res || !res.ok || !Array.isArray(res.tiles) || res.tiles.length === 0) {
+      const li = document.createElement('li');
+      li.style.padding = '12px';
+      li.style.border = '1px solid #eee';
+      li.style.borderRadius = '8px';
+      li.textContent = 'No tiles';
+      ul.appendChild(li);
+      return;
+    }
+    for (const t of res.tiles) {
+      const li = document.createElement('li');
+      li.style.padding = '10px';
+      li.style.border = '1px solid #eee';
+      li.style.borderRadius = '8px';
+      li.style.background = '#fff';
+      li.style.display = 'flex';
+      li.style.justifyContent = 'space-between';
+      li.style.alignItems = 'center';
+
+      const left = document.createElement('div');
+      left.textContent = t.title || '(untitled)';
+      left.style.fontWeight = '600';
+      left.style.flex = '1';
+      left.style.minWidth = '0';
+      left.style.overflow = 'hidden';
+      left.style.textOverflow = 'ellipsis';
+      left.style.whiteSpace = 'nowrap';
+
+      // make the left column tappable to open the tile (removes separate Open button)
+      left.style.cursor = 'pointer';
+      left.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        try {
+          await renderMobileEntityEditor('tile', storyName, t.id, t.title || '(untitled)');
+        } catch (err) {
+          console.error('open tile (mobile) failed', err);
+          alert('Failed to open tile');
+        }
+      });
+
+      li.appendChild(left);
+      ul.appendChild(li);
+    }
+  } catch (e) {
+    console.warn('refreshMobileTilesList failed', e);
+  }
+}
+
+async function renderMobileEntityEditor(type, storyName, id, title) {
+  try {
+    if (!document.getElementById('mobileRoot')) renderMobileRoot();
+    const root = document.getElementById('mobileRoot');
+    if (!root) return;
+    // mark as entity screen so footer/back behavior can distinguish it
+    state.mobileScreen = 'entity';
+    // set currentView so other UI pieces know which entity is active
+    state.currentView = { type: (type === 'tile' ? 'tile' : 'highlight'), id: id };
+
+    // clear and build header/body
+    root.innerHTML = '';
+
+    // Header (fixed)
+    const { header, headerControls, setTitle, height: MOBILE_HEADER_HEIGHT } = createMobileHeader(`${storyName} - ${title}`);
+    root.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'mobile-body';
+    body.style.display = 'flex';
+    body.style.flexDirection = 'column';
+    body.style.alignItems = 'center';
+    body.style.gap = '12px';
+    body.style.padding = '12px';
+
+    // microphone controls (local mic button that reuses start/stop)
+    const micWrap = document.createElement('div');
+    micWrap.style.display = 'flex';
+    micWrap.style.gap = '8px';
+    micWrap.style.alignItems = 'center';
+
+    const micBtn = document.createElement('button');
+    micBtn.className = 'mobile-mic-btn';
+    const updateMicBtn = () => {
+      try {
+        micBtn.textContent = speechActive ? '🎙️● Stop' : '🎙️ Start';
+        micBtn.setAttribute('aria-pressed', String(!!speechActive));
+      } catch (e) {}
+    };
+    micBtn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      if (!speechActive) startRecognition();
+      else stopRecognition();
+      // small delay to allow recognition/onend to update speechActive
+      setTimeout(updateMicBtn, 100);
+    });
+    updateMicBtn();
+    micWrap.appendChild(micBtn);
+
+    // language select: reuse global speechLang if present; otherwise create and populate from _speechLangs
+    let langSelect = document.getElementById('speechLang');
+    if (!langSelect) {
+      langSelect = document.createElement('select');
+      langSelect.id = 'speechLang';
+      // prefer the full language list when available
+      const langs = (typeof _speechLangs !== 'undefined' && Array.isArray(_speechLangs) && _speechLangs.length > 0)
+        ? _speechLangs
+        : [{ code: 'EN', locale: 'en-US' }, { code: 'FR', locale: 'fr-FR' }];
+      langs.forEach(l => {
+        const o = document.createElement('option');
+        o.value = l.locale;
+        o.textContent = l.code || l.locale;
+        langSelect.appendChild(o);
+      });
+      // ensure global reference is set so other code (setEditorEnabled) control it
+      try { speechLang = langSelect; } catch (e) {}
+    } else {
+      // reuse existing element and keep global reference in sync
+      try { speechLang = langSelect; } catch (e) {}
+    }
+    langSelect.addEventListener('change', () => {
+      try {
+        if (recognition) {
+          // change lang on next start
+          stopRecognition();
+        }
+      } catch (e) {}
+    });
+    // append into the headerControls (preferred) so the select is visible in the fixed header;
+    // fall back to micWrap if headerControls isn't available for any reason.
+    try {
+      if (headerControls && header.appendChild) headerControls.appendChild(langSelect);
+      else micWrap.appendChild(langSelect);
+    } catch (e) {
+      micWrap.appendChild(langSelect);
+    }
+
+    // place mic controls into the fixed header so they're always reachable
+    try { headerControls.appendChild(micWrap); } catch (e) { body.appendChild(micWrap); }
+
+    // editor textarea
+    const ta = document.createElement('textarea');
+    ta.style.width = '92%';
+    ta.style.minHeight = '220px';
+    ta.style.padding = '10px';
+    ta.style.borderRadius = '8px';
+    ta.style.border = '1px solid #ddd';
+    ta.value = '';
+
+    // preview container (hidden initially)
+    const previewWrap = document.createElement('div');
+    previewWrap.style.width = '92%';
+    previewWrap.style.minHeight = '200px';
+    previewWrap.style.display = 'none';
+    previewWrap.style.background = '#fff';
+    previewWrap.style.padding = '8px';
+    previewWrap.style.borderRadius = '8px';
+    previewWrap.style.border = '1px solid #eee';
+    previewWrap.id = 'mobileEntityPreview';
+
+    // load content from API
+    try {
+      let got = null;
+      if (type === 'tile') {
+        got = await api.getTile(storyName, id).catch(() => null);
+        if (!got || !got.ok) throw new Error(got && got.error ? got.error : 'Failed to load tile');
+        ta.value = got.content || '';
+      } else {
+        got = await api.getHighlight(storyName, id).catch(() => null);
+        if (!got || !got.ok) throw new Error(got && got.error ? got.error : 'Failed to load highlight');
+        ta.value = got.content || '';
+      }
+    } catch (err) {
+      console.error('renderMobileEntityEditor load failed', err);
+      alert('Failed to load content');
+      // fallback: go back to the correct list
+      if (type === 'tile') renderMobileTilesView(storyName);
+      else renderMobileHighlightsView(storyName);
+     ;
+    }
+
+    // make the textarea use remaining space in the mobile view
+    // ensure body and preview take flexible space so ta can grow to fill the viewport
+    try { body.style.flex = '1'; body.style.minHeight = '0'; } catch (e) {}
+    ta.style.flex = '1';
+    ta.style.minHeight = '0';
+    ta.style.height = 'auto';
+    previewWrap.style.flex = '1';
+    previewWrap.style.minHeight = '0';
+
+    body.appendChild(ta);
+    body.appendChild(previewWrap);
+
+    // expose mobile textarea globally so speech helpers insert into it
+    mobileActiveTextarea = ta;
+    try {
+      ta.dataset.entityType = type;
+      ta.dataset.entityStory = storyName;
+      ta.dataset.entityId = id;
+    } catch (e) {}
+
+    // autosave on input (debounced)
+    let mobileAutosaveTimer = null;
+    const mobileAutosaveDelay = 400;
+    const mobileStatus = document.createElement('div');
+    mobileStatus.style.fontSize = '12px';
+    mobileStatus.style.color = '#666';
+    mobileStatus.style.marginTop = '6px';
+    mobileStatus.textContent = '';
+
+    ta.addEventListener('input', () => {
+      try {
+        // indicate saving state
+        mobileStatus.textContent = 'Saving...';
+        if (mobileAutosaveTimer) clearTimeout(mobileAutosaveTimer);
+        mobileAutosaveTimer = setTimeout(async () => {
+          try {
+            const content = ta.value || '';
+            if (!state.currentStory || !id) {
+              mobileStatus.textContent = '';
+              return;
+            }
+            let res = null;
+            if (type === 'tile') res = await api.saveTile(storyName, id, content).catch(() => null);
+            else res = await api.saveHighlight(storyName, id, content).catch(() => null);
+            if (res && res.ok) {
+              mobileStatus.textContent = 'Saved';
+              setTimeout(() => { try { mobileStatus.textContent = ''; } catch (e) {} }, 900);
+            } else {
+              mobileStatus.textContent = 'Save failed';
+              console.warn('mobile autosave failed', res);
+              setTimeout(() => { try { mobileStatus.textContent = ''; } catch (e) {} }, 1500);
+            }
+            // refresh lists so counts update
+            try { await refreshEntityLists(); } catch (e) {}
+            try { await refreshTiles(); } catch (e) {}
+            try { await refreshMobileTilesList(storyName); } catch (e) {}
+            try { await refreshMobileHighlightsList(storyName); } catch (e) {}
+          } catch (err) {
+            console.error('mobile autosave error', err);
+            mobileStatus.textContent = '';
+          }
+        }, mobileAutosaveDelay);
+      } catch (e) {
+        console.warn('mobile input handler failed', e);
+      }
+    });
+
+    body.appendChild(mobileStatus);
+
+    // controls row: Preview toggle + Save (Save is hidden because autosave is active)
+    const ctrlRow = document.createElement('div');
+    ctrlRow.style.display = 'flex';
+    ctrlRow.style.gap = '8px';
+    ctrlRow.style.justifyContent = 'center';
+    ctrlRow.style.width = '100%';
+
+    const previewBtn = document.createElement('button');
+    previewBtn.textContent = 'Preview';
+    let showingPreview = false;
+    previewBtn.addEventListener('click', () => {
+      try {
+        if (!showingPreview) {
+          // render markdown into previewWrap
+          const html = simpleMarkdownToHtml(ta.value || '');
+          previewWrap.innerHTML = html || '<div class="empty-preview">[preview empty]</div>';
+          try { renderTags(previewWrap); } catch (e) {}
+          previewWrap.style.display = 'block';
+          ta.style.display = 'none';
+          previewBtn.textContent = 'Edit';
+          showingPreview = true;
+        } else {
+          previewWrap.style.display = 'none';
+          ta.style.display = 'block';
+          previewBtn.textContent = 'Preview';
+          showingPreview = false;
+        }
+      } catch (e) { console.warn('mobile preview toggle failed', e); }
+    });
+    // move preview into the fixed header so it's always reachable without scrolling
+    try { headerControls.appendChild(previewBtn); } catch (e) { ctrlRow.appendChild(previewBtn); }
+
+    const saveMobileBtn = document.createElement('button');
+    saveMobileBtn.textContent = 'Save';
+    // hide the explicit save button when autosave is enabled for mobile editor
+    saveMobileBtn.style.display = 'none';
+    ctrlRow.appendChild(saveMobileBtn);
+
+    body.appendChild(ctrlRow);
+
+    root.appendChild(body);
+
+    // ensure body content not hidden behind fixed header
+    try {
+      const hh = typeof MOBILE_HEADER_HEIGHT !== 'undefined' ? MOBILE_HEADER_HEIGHT : 56;
+      body.style.paddingTop = hh + 'px';
+      body.style.overflow = 'auto';
+      body.style.maxHeight = `calc(100vh - ${hh}px)`;
+    } catch (e) {}
+
+    // ensure mobile footer updated (recreate footer so Back works)
+    try {
+      const logoutBtnF = document.getElementById('logoutBtn');
+      const localLabelF = document.getElementById('localModeLabel');
+      const isAuthF = !!(logoutBtnF && logoutBtnF.style && logoutBtnF.style.display !== 'none');
+      const isLocalF = !!(localLabelF && localLabelF.style && localLabelF.style.display !== 'none');
+      ensureMobileFooter(isAuthF, isLocalF);
+    } catch (e) {}
+
+    // focus textarea for editing
+    try { ta.focus(); } catch (e) {}
+  } catch (e) {
+    console.error('renderMobileEntityEditor failed', e);
+  }
+}
+/* Mobile Highlights screen renderer + helper
+   - Header: "<story> - Highlights"
+   - Main: create highlight form + list of highlights (mobileHighlightsList)
+   - Footer: mobile Back handled by ensureMobileFooter (Back from highlights returns to chooser)
+*/
+function renderMobileHighlightsView(storyName) {
+  try {
+    if (!document.getElementById('mobileRoot')) renderMobileRoot();
+    const root = document.getElementById('mobileRoot');
+    if (!root) return;
+    state.mobileScreen = 'highlights';
+
+    // clear and build header/body
+    root.innerHTML = '';
+
+    const header = document.createElement('header');
+    header.className = 'mobile-header';
+    header.style.display = 'flex';
+    header.style.alignItems = 'center';
+    header.style.justifyContent = 'center';
+    header.style.padding = '12px 8px';
+
+    const title = document.createElement('div');
+    title.textContent = `${storyName} - Highlights`;
+    title.style.fontSize = '18px';
+    title.style.fontWeight = '700';
+    header.appendChild(title);
+    root.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'mobile-body';
+    body.style.display = 'flex';
+    body.style.flexDirection = 'column';
+    body.style.alignItems = 'center';
+    body.style.gap = '12px';
+    body.style.padding = '12px';
+
+    // create form
+    const form = document.createElement('div');
+    form.style.display = 'flex';
+    form.style.flexDirection = 'column';
+    form.style.width = '100%';
+    form.style.gap = '8px';
+    const input = document.createElement('input');
+    input.placeholder = 'New highlight title';
+    input.id = 'mobileNewHighlightTitle';
+    input.style.padding = '10px';
+    input.style.borderRadius = '8px';
+    input.style.border = '1px solid #ddd';
+    input.style.width = '84%';
+    input.style.margin = '0 auto';
+    const createBtn = document.createElement('button');
+    createBtn.textContent = 'Create Highlight';
+    createBtn.className = 'mobile-big-btn';
+    createBtn.style.width = '84%';
+    createBtn.style.margin = '0 auto';
+    createBtn.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      const titleVal = (input.value || '').trim();
+      if (!titleVal) return alert('Enter a highlight title');
+      try {
+        // Reuse createEntityAndOpen to create and open the highlight
+        if (!state.currentStory) return alert('Open a story first');
+        await createEntityAndOpen('highlights', titleVal, true);
+        input.value = '';
+        await refreshMobileHighlightsList(storyName);
+      } catch (err) {
+        console.error('create highlight (mobile) failed', err);
+        alert('Create failed');
+      }
+    });
+
+    form.appendChild(input);
+    form.appendChild(createBtn);
+    body.appendChild(form);
+
+    // highlights list container
+    const listWrap = document.createElement('div');
+    listWrap.style.width = '100%';
+    listWrap.style.marginTop = '6px';
+    const ul = document.createElement('ul');
+    ul.id = 'mobileHighlightsList';
+    ul.style.listStyle = 'none';
+    ul.style.padding = '0';
+    ul.style.margin = '0';
+    ul.style.display = 'flex';
+    ul.style.flexDirection = 'column';
+    ul.style.gap = '8px';
+    listWrap.appendChild(ul);
+    body.appendChild(listWrap);
+
+    root.appendChild(body);
+
+    // ensure mobile footer updated
+    try {
+      const logoutBtnF = document.getElementById('logoutBtn');
+      const localLabelF = document.getElementById('localModeLabel');
+      const isAuthF = !!(logoutBtnF && logoutBtnF.style && logoutBtnF.style.display !== 'none');
+      const isLocalF = !!(localLabelF && localLabelF.style && localLabelF.style.display !== 'none');
+      ensureMobileFooter(isAuthF, isLocalF);
+    } catch (e) {}
+
+    // focus input for quick highlight creation
+    try { input.focus(); } catch (e) {}
+
+    // populate list
+    refreshMobileHighlightsList(storyName);
+  } catch (e) {
+    console.warn('renderMobileHighlightsView error', e);
+  }
+}
+
+async function refreshMobileHighlightsList(storyName) {
+  try {
+    const ul = document.getElementById('mobileHighlightsList');
+    if (!ul) return;
+    ul.innerHTML = '';
+    const res = await api.listHighlights(storyName).catch(() => null);
+    if (!res || !res.ok || !Array.isArray(res.highlights) || res.highlights.length === 0) {
+      const li = document.createElement('li');
+      li.style.padding = '12px';
+      li.style.border = '1px solid #eee';
+      li.style.borderRadius = '8px';
+      li.textContent = 'No highlights';
+      ul.appendChild(li);
+      return;
+    }
+    for (const hmeta of res.highlights) {
+      const li = document.createElement('li');
+      li.style.padding = '10px';
+      li.style.border = '1px solid #eee';
+      li.style.borderRadius = '8px';
+      li.style.background = '#fff';
+      li.style.display = 'flex';
+      li.style.justifyContent = 'space-between';
+      li.style.alignItems = 'center';
+
+      const left = document.createElement('div');
+      left.textContent = hmeta.title || hmeta.id || '(untitled)';
+      left.style.fontWeight = '600';
+      left.style.flex = '1';
+      left.style.minWidth = '0';
+      left.style.overflow = 'hidden';
+      left.style.textOverflow = 'ellipsis';
+      left.style.whiteSpace = 'nowrap';
+
+      // make the left column tappable to open the highlight (removes separate Open button)
+      left.style.cursor = 'pointer';
+      left.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        try {
+          const got = await api.getHighlight(storyName, hmeta.id).catch(() => null);
+          if (!got || !got.ok) return alert(got && got.error ? got.error : 'Failed to load highlight');
+          await renderMobileEntityEditor('highlight', storyName, hmeta.id, got.title || hmeta.title || hmeta.id);
+        } catch (err) {
+          console.error('open highlight (mobile) failed', err);
+          alert('Failed to open highlight');
+        }
+      });
+
+      li.appendChild(left);
+      ul.appendChild(li);
+    }
+  } catch (e) {
+    console.warn('refreshMobileHighlightsList failed', e);
+  }
+}
+
+function scheduleMobileModeUpdate(delay = 150) {
+  if (_mobileModeDebounceTimer) clearTimeout(_mobileModeDebounceTimer);
+  _mobileModeDebounceTimer = setTimeout(() => updateMobileMode(), delay);
+}
+
+// wire listeners for viewport changes
+try {
+  window.addEventListener('resize', () => scheduleMobileModeUpdate(120));
+  window.addEventListener('orientationchange', () => scheduleMobileModeUpdate(120));
+  if (window.visualViewport && typeof window.visualViewport.addEventListener === 'function') {
+    window.visualViewport.addEventListener('resize', () => scheduleMobileModeUpdate(120));
+  }
+  // inject a minimal stylesheet placeholder for .mobile-mode so authors can expand it in public/style.css later
+  if (!document.getElementById('mobileModeStyles')) {
+    const s = document.createElement('style');
+    s.id = 'mobileModeStyles';
+    s.textContent = 'body.mobile-mode { /* mobile mode active — add layout overrides in public/style.css as needed */ }';
+    document.head && document.head.appendChild(s);
+  }
+  // run an initial detection pass
+  scheduleMobileModeUpdate(0);
+} catch (e) {
+  console.warn('mobile mode init failed', e);
+}
+
+/* Mobile header helper
+   Creates a fixed header used by all mobile screens so controls (mic, preview, lang)
+   remain accessible while the content body scrolls underneath.
+   Returns: { header, headerControls, setTitle, height }
+*/
+function createMobileHeader(titleText) {
+  const header = document.createElement('header');
+  header.className = 'mobile-header';
+  header.style.position = 'fixed';
+  header.style.top = '0';
+  header.style.left = '0';
+  header.style.right = '0';
+  header.style.height = '56px';
+  header.style.display = 'flex';
+  header.style.alignItems = 'center';
+  header.style.justifyContent = 'space-between';
+  header.style.padding = '8px 12px';
+  header.style.zIndex = '1001';
+  header.style.background = '#fff';
+  header.style.boxShadow = '0 1px 0 rgba(0,0,0,0.04)';
+
+  const title = document.createElement('div');
+  title.textContent = titleText || '';
+  title.style.fontSize = '18px';
+  title.style.fontWeight = '700';
+  title.style.flex = '1';
+  title.style.minWidth = '0';
+  title.style.overflow = 'hidden';
+  title.style.textOverflow = 'ellipsis';
+  title.style.whiteSpace = 'nowrap';
+
+  const headerControls = document.createElement('div');
+  headerControls.style.display = 'flex';
+  headerControls.style.alignItems = 'center';
+  headerControls.style.gap = '8px';
+  headerControls.style.flex = '0 0 auto';
+
+  header.appendChild(title);
+  header.appendChild(headerControls);
+
+  return {
+    header,
+    headerControls,
+    setTitle: (t) => { try { title.textContent = t; } catch (e) {} },
+    height: 56
+  };
+}
+
 // --- Speech-to-text (Web Speech API) ---
 // Client-only implementation: toggles microphone and inserts transcripts into the active editor.
 // Privacy: audio never leaves the user's device (no server upload).
@@ -2579,49 +3649,89 @@ function updateSpeechUI(active) {
 }
 
 function insertInterim(interimText) {
-  if (!editor) return;
+  // prefer mobileActiveTextarea when available (mobile editor), otherwise fall back to desktop editor
+  const target = (mobileActiveTextarea && mobileActiveTextarea instanceof HTMLTextAreaElement) ? mobileActiveTextarea : editor;
+  if (!target) return;
   try {
-    // Determine insertion start: reuse lastInterim.start when present, else use current caret
-    const selStart = (typeof editor.selectionStart === 'number') ? editor.selectionStart : editor.value.length;
-    const selEnd = (typeof editor.selectionEnd === 'number') ? editor.selectionEnd : selStart;
+    const selStart = (typeof target.selectionStart === 'number') ? target.selectionStart : target.value.length;
+    const selEnd = (typeof target.selectionEnd === 'number') ? target.selectionEnd : selStart;
     const start = lastInterim ? lastInterim.start : selStart;
-    const after = lastInterim ? editor.value.slice(lastInterim.end) : editor.value.slice(selEnd);
-    const before = editor.value.slice(0, start);
+    const after = lastInterim ? target.value.slice(lastInterim.end) : target.value.slice(selEnd);
+    const before = target.value.slice(0, start);
     const newValue = before + interimText + after;
-    editor.value = newValue;
+    target.value = newValue;
     const newPos = before.length + interimText.length;
-    editor.selectionStart = editor.selectionEnd = newPos;
+    target.selectionStart = target.selectionEnd = newPos;
     lastInterim = { start: start, end: newPos, text: interimText };
-    renderPreview();
+    // update preview only for desktop editor; mobile editor has its own preview toggle
+    if (target === editor) renderPreview();
   } catch (e) {
     console.warn('insertInterim failed', e);
   }
 }
 
 function insertFinal(finalText) {
-  if (!editor) return;
+  // prefer mobileActiveTextarea when available (mobile editor), otherwise fall back to desktop editor
+  const target = (mobileActiveTextarea && mobileActiveTextarea instanceof HTMLTextAreaElement) ? mobileActiveTextarea : editor;
+  if (!target) return;
   try {
     if (lastInterim) {
       const start = lastInterim.start;
-      const after = editor.value.slice(lastInterim.end);
-      const before = editor.value.slice(0, start);
-      editor.value = before + finalText + after;
+      const after = target.value.slice(lastInterim.end);
+      const before = target.value.slice(0, start);
+      target.value = before + finalText + after;
       const pos = before.length + finalText.length;
-      editor.selectionStart = editor.selectionEnd = pos;
+      target.selectionStart = target.selectionEnd = pos;
       lastInterim = null;
     } else {
       // Insert at current selection
-      const selStart = (typeof editor.selectionStart === 'number') ? editor.selectionStart : editor.value.length;
-      const selEnd = (typeof editor.selectionEnd === 'number') ? editor.selectionEnd : selStart;
-      const before = editor.value.slice(0, selStart);
-      const after = editor.value.slice(selEnd);
-      editor.value = before + finalText + after;
+      const selStart = (typeof target.selectionStart === 'number') ? target.selectionStart : target.value.length;
+      const selEnd = (typeof target.selectionEnd === 'number') ? target.selectionEnd : selStart;
+      const before = target.value.slice(0, selStart);
+      const after = target.value.slice(selEnd);
+      target.value = before + finalText + after;
       const pos = before.length + finalText.length;
-      editor.selectionStart = editor.selectionEnd = pos;
+      target.selectionStart = target.selectionEnd = pos;
     }
-    renderPreview();
-    // Persist the change shortly after finalizing
-    try { scheduleAutoSave(200); } catch (e) {}
+    // update preview only for desktop editor; mobile editor has its own preview toggle
+    if (target === editor) {
+      renderPreview();
+      try { scheduleAutoSave(200); } catch (e) {}
+    } else {
+      // if mobile, trigger the mobile autosave immediately and persist speech-final text
+      try {
+        if (mobileActiveTextarea && mobileActiveTextarea === target) {
+          // fire an input event so the existing autosave UI runs (shows Saving/Saved)
+          try { target.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
+
+          // best-effort immediate save for speech-final text using annotated dataset on the textarea
+          (async () => {
+            try {
+              const content = target.value || '';
+              const typ = target.dataset && target.dataset.entityType ? target.dataset.entityType : null;
+              const story = target.dataset && target.dataset.entityStory ? target.dataset.entityStory : null;
+              const eid = target.dataset && target.dataset.entityId ? target.dataset.entityId : null;
+              if (!typ || !story || !eid) return;
+              let res = null;
+              if (typ === 'tile') {
+                res = await api.saveTile(story, eid, content).catch(() => null);
+              } else {
+                res = await api.saveHighlight(story, eid, content).catch(() => null);
+              }
+              if (res && res.ok) {
+                try { await refreshEntityLists(); } catch (e) {}
+                try { await refreshMobileTilesList(story); } catch (e) {}
+                try { await refreshMobileHighlightsList(story); } catch (e) {}
+              } else {
+                console.warn('mobile speech save failed', res);
+              }
+            } catch (err) {
+              console.warn('mobile speech save error', err);
+            }
+          })();
+        }
+      } catch (e) {}
+    }
   } catch (e) {
     console.warn('insertFinal failed', e);
   }
@@ -2877,9 +3987,161 @@ function applyAuthStatus(status) {
     // Run an initial async check for publishability (do not block applyAuthStatus)
     try { updatePublishButtonState(); } catch (e) {}
 
+    // Ensure mobile footer reflects current auth/local state when auth status changes
+    try {
+      const logoutBtn2 = document.getElementById('logoutBtn');
+      const localLabel2 = document.getElementById('localModeLabel');
+      const isAuthNow2 = !!(logoutBtn2 && logoutBtn2.style && logoutBtn2.style.display !== 'none');
+      const isLocalNow2 = !!(localLabel2 && localLabel2.style && localLabel2.style.display !== 'none');
+      ensureMobileFooter(isAuthNow2, isLocalNow2);
+    } catch (e) {}
+    // Re-evaluate mobile mode after auth status is applied (covers Auth0 login flows)
+    try { updateMobileMode(); } catch (e) {}
+
   }
 
- // wire buttons to server-side /login and /logout
+/* Mobile footer helper — shown only in mobile mode: logout button or red "Local Mode" label.
+   ensureMobileFooter(isAuth, isLocal)
+     - isAuth: boolean, true when user is authenticated
+     - isLocal: boolean, true when running in localMode
+*/
+function ensureMobileFooter(isAuth, isLocal) {
+  try {
+    // remove existing footer if mobile mode disabled
+    if (!state || !state.mobileMode) {
+      const prev = document.getElementById('mobileFooter');
+      if (prev && prev.parentNode) prev.parentNode.removeChild(prev);
+      return;
+    }
+
+    // If viewing a published story route, show a simple Back footer that navigates to root.
+    const isPublishedRoute = (typeof window !== 'undefined' && window.location && window.location.pathname && String(window.location.pathname).startsWith('/published'));
+    // prefer the runtime mobile state, but fall back to a fresh computation in case the mobile-mode class hasn't been applied yet
+    const isMobileNow = (state && state.mobileMode) || (typeof computeMobileMode === 'function' ? computeMobileMode() : false);
+    if (isPublishedRoute && isMobileNow) {
+      // remove any existing footer
+      const prev = document.getElementById('mobileFooter');
+      if (prev && prev.parentNode) prev.parentNode.removeChild(prev);
+
+      const pubFooter = document.createElement('div');
+      pubFooter.id = 'mobileFooter';
+      // attach to mobileRoot when available so footer sits above mobile UI containers
+      const attachTarget = document.getElementById('mobileRoot') || document.body;
+      pubFooter.style.position = 'fixed';
+      pubFooter.style.left = '0';
+      pubFooter.style.right = '0';
+      pubFooter.style.bottom = '0';
+      // ensure it's above other UI chrome
+      pubFooter.style.zIndex = '99999';
+      pubFooter.style.display = 'flex';
+      pubFooter.style.justifyContent = 'center';
+      pubFooter.style.alignItems = 'center';
+      pubFooter.style.padding = '12px';
+      pubFooter.style.boxShadow = '0 -6px 18px rgba(0,0,0,0.12)';
+      pubFooter.style.background = 'var(--footer-bg, #fff)';
+      pubFooter.style.backdropFilter = 'blur(6px)';
+      pubFooter.setAttribute('role', 'navigation');
+      pubFooter.setAttribute('aria-hidden', 'false');
+
+      const backBtn = document.createElement('button');
+      backBtn.id = 'mobileBackBtn';
+      backBtn.className = 'write-btn';
+      backBtn.textContent = 'Back';
+      backBtn.style.minWidth = '88px';
+      backBtn.style.textAlign = 'center';
+      backBtn.addEventListener('click', () => {
+        try { window.location.href = '/'; } catch (e) { try { history.replaceState(null, '', '/'); window.location.reload(); } catch (err) {} }
+      });
+      pubFooter.appendChild(backBtn);
+
+      try { attachTarget.appendChild(pubFooter); } catch (e) { document.body.appendChild(pubFooter); }
+      return;
+    }
+
+    let el = document.getElementById('mobileFooter');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'mobileFooter';
+      el.style.position = 'fixed';
+      el.style.left = '0';
+      el.style.right = '0';
+      el.style.bottom = '0';
+      el.style.zIndex = '9999';
+      el.style.display = 'flex';
+      el.style.justifyContent = 'center';
+      el.style.alignItems = 'center';
+      el.style.padding = '10px';
+      el.style.boxShadow = '0 -6px 18px rgba(0,0,0,0.08)';
+      el.style.background = 'var(--footer-bg, #fff)';
+      el.style.backdropFilter = 'blur(4px)';
+      document.body.appendChild(el);
+    }
+    // clear contents
+    el.innerHTML = '';
+    // Mobile "Back" button (replaces Local Mode / Log out in mobile view)
+    const backBtn = document.createElement('button');
+    backBtn.id = 'mobileBackBtn';
+    backBtn.className = 'write-btn';
+    backBtn.textContent = 'Back';
+    backBtn.addEventListener('click', () => {
+      try {
+        // navigation depends on which mobile screen is currently shown
+        try {
+          if (state && state.mobileScreen === 'tiles') {
+            // from tiles view -> go back to story chooser (Tiles/Highlights)
+            try { renderMobileStoryView(state.currentStory); } catch (e) { try { renderMobileRoot(); } catch (err) {} }
+            return;
+          }
+          if (state && state.mobileScreen === 'highlights') {
+            // from highlights view -> go back to story chooser
+            try { renderMobileStoryView(state.currentStory); } catch (e) { try { renderMobileRoot(); } catch (err) {} }
+            return;
+          }
+          if (state && state.mobileScreen === 'entity') {
+            // from entity editor -> go back to the corresponding list view (tiles or highlights)
+            try {
+              // clear mobile-specific state (stop speech, clear active textarea)
+              try { mobileActiveTextarea = null; } catch (e) {}
+              try { if (speechActive) stopRecognition(); } catch (e) {}
+              if (state.currentView && state.currentView.type === 'tile') {
+                renderMobileTilesView(state.currentStory);
+              } else {
+                renderMobileHighlightsView(state.currentStory);
+              }
+            } catch (e) { try { renderMobileRoot(); } catch (err) {} }
+            return;
+          }
+          if (state && state.mobileScreen === 'story') {
+            // from story view -> go to story list
+            try { closeCurrentStory(); } catch (e) {}
+            try { renderMobileRoot(); } catch (e) {}
+            return;
+          }
+          if (state && state.mobileScreen === 'list') {
+            // from story list -> go to the top-level write screen
+            try { window.location.href = '/'; } catch (e) {}
+            return;
+          }
+          // fallback: go to top-level
+          try { window.location.href = '/'; } catch (e) {}
+        } catch (e) {
+          try { window.location.href = '/'; } catch (err) {}
+        }
+      } catch (e) {
+        try { window.location.href = '/'; } catch (err) {}
+      }
+    });
+    el.appendChild(backBtn);
+    return;
+
+    // otherwise remove footer
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  } catch (e) {
+    console.warn('ensureMobileFooter failed', e);
+  }
+}
+
+// wire buttons to server-side /login and /logout
  if (loginBtn) loginBtn.addEventListener('click', () => { window.location.href = '/login'; });
  if (logoutBtn) logoutBtn.addEventListener('click', () => { window.location.href = '/logout'; });
  if (splashLoginBtn) splashLoginBtn.addEventListener('click', () => { window.location.href = '/login'; });
@@ -2993,8 +4255,25 @@ function applyAuthStatus(status) {
   }
 })();
 
- // expose for debugging
-window._storyWriter = { state, refreshStories, openStory, saveMainText };
+  // expose for debugging
+ window._storyWriter = Object.assign(window._storyWriter || {}, {
+   state,
+   refreshStories,
+   openStory,
+   saveMainText,
+   // expose mobile helpers
+   mobileMode: !!(state && state.mobileMode),
+   updateMobileMode,
+   forceMobile: (on) => {
+     try {
+       if (on) localStorage.setItem('forceMobile', '1');
+       else localStorage.removeItem('forceMobile');
+     } catch (e) {
+       // ignore storage errors
+     }
+     try { updateMobileMode(); } catch (e) {}
+   }
+ });
 
 (function() {
   // Sidebar splitter: allow resizing Stories / Tiles / Highlights panes vertically.

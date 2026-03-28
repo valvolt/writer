@@ -11,14 +11,35 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const STORIES_ROOT = path.join(__dirname, 'stories');
+// Local mode detection: if the .env file is missing OR required Auth0 env vars are absent
+const _envExists = fs.existsSync(path.join(__dirname, '.env'));
+const _hasAuthVars = !!(process.env.AUTH0_CLIENT_ID && process.env.AUTH0_ISSUER_BASE_URL);
+const LOCAL_MODE = (!_envExists) || (!_hasAuthVars);
 
- // Local mode detection: if the .env file is missing OR required Auth0 env vars are absent
- // we run in a local developer mode where authentication is simulated. This keeps the
- // existing Auth0 integration intact for production but allows a friction-free local workflow.
- const _envExists = fs.existsSync(path.join(__dirname, '.env'));
- const _hasAuthVars = !!(process.env.AUTH0_CLIENT_ID && process.env.AUTH0_ISSUER_BASE_URL);
- const LOCAL_MODE = (!_envExists) || (!_hasAuthVars);
+// configure express-openid-connect using values from .env (if present)
+// see .env for AUTH0_AUTH_REQUIRED, AUTH0_AUTH0LOGOUT, SECRET, AUTH0_BASEURL, AUTH0_CLIENT_ID, AUTH0_ISSUER_BASE_URL
+const authConfig = {
+  authRequired: (process.env.AUTH0_AUTH_REQUIRED === 'true'),
+  auth0Logout: (process.env.AUTH0_AUTH0LOGOUT === 'true'),
+  secret: process.env.SECRET || 'replace-with-a-long-secret',
+  baseURL: process.env.AUTH0_BASEURL || `http://localhost:${process.env.PORT || 3000}`,
+  clientID: process.env.AUTH0_CLIENT_ID || '',
+  issuerBaseURL: process.env.AUTH0_ISSUER_BASE_URL || ''
+};
+
+// attach auth router (adds /login, /logout, /callback)
+// In LOCAL_MODE we skip mounting the express-openid-connect auth router because
+// it validates required config (clientID, issuer) at init and will throw when
+// those values are empty. When running locally without a .env we simulate auth
+// via /api/auth-status instead.
+if (!LOCAL_MODE) {
+  app.use(auth(authConfig));
+} else {
+  console.warn('[server] running in LOCAL_MODE: Auth0 integration disabled, simulating auth via /api/auth-status');
+}
+
+
+const STORIES_ROOT = path.join(__dirname, 'stories');
 
 // ensure stories dir exists
 if (!fs.existsSync(STORIES_ROOT)) {
@@ -59,34 +80,29 @@ if (!fs.existsSync(STORIES_ROOT)) {
        }
        html += '</ul>';
      }
-     html += '</body></html>';
+     // compute a small mobile-only footer (Local Mode or logout when authenticated)
+     let footerHtmlRoot = '';
+     try {
+       const isLocal = LOCAL_MODE;
+       const isAuth = !!(req && req.oidc && req.oidc.isAuthenticated && req.oidc.isAuthenticated());
+       if (isLocal) {
+         footerHtmlRoot = '<div id="mobileFooter" role="contentinfo" aria-hidden="false" style="color:#b71c1c;font-weight:700">Local Mode</div>';
+       } else if (isAuth) {
+         footerHtmlRoot = '<div id="mobileFooter" role="contentinfo" aria-hidden="false"><a href="/logout" style="color:inherit;text-decoration:none">Log out</a></div>';
+       }
+     } catch (e) {
+       footerHtmlRoot = '';
+     }
+ 
+     // minimal mobile-only styles (appears only on small viewports)
+     const mobileFooterStyles = '<style>@media (max-width:640px){#mobileFooter{position:fixed;left:0;right:0;bottom:0;z-index:99999;display:flex;justify-content:center;align-items:center;padding:10px;background:#fff;border-top:1px solid rgba(0,0,0,0.06);box-shadow:0 -6px 18px rgba(0,0,0,0.08);font-weight:700}#mobileFooter a{color:#111-decoration:none}}@media (min-width:641px){#mobileFooter{display:none !important}}</style>';
+ 
+     html += (mobileFooterStyles + (footerHtmlRoot || '')) + '</body></html>';
      res.send(html);
    } catch (err) {
      res.status(500).send('failed to generate published list');
    }
  });
-
- // configure express-openid-connect using values from .env (if present)
- // see .env for AUTH0_AUTH_REQUIRED, AUTH0_AUTH0LOGOUT, SECRET, AUTH0_BASEURL, AUTH0_CLIENT_ID, AUTH0_ISSUER_BASE_URL
- const authConfig = {
-   authRequired: (process.env.AUTH0_AUTH_REQUIRED === 'true'),
-   auth0Logout: (process.env.AUTH0_AUTH0LOGOUT === 'true'),
-   secret: process.env.SECRET || 'replace-with-a-long-secret',
-   baseURL: process.env.AUTH0_BASEURL || `http://localhost:${process.env.PORT || 3000}`,
-   clientID: process.env.AUTH0_CLIENT_ID || '',
-   issuerBaseURL: process.env.AUTH0_ISSUER_BASE_URL || ''
- };
-
- // attach auth router (adds /login, /logout, /callback)
- // In LOCAL_MODE we skip mounting the express-openid-connect auth router because
- // it validates required config (clientID, issuer) at init and will throw when
- // those values are empty. When running locally without a .env we simulate auth
- // via /api/auth-status instead.
- if (!LOCAL_MODE) {
-   app.use(auth(authConfig));
- } else {
-   console.warn('[server] running in LOCAL_MODE: Auth0 integration disabled, simulating auth via /api/auth-status');
- }
  
  // requireAuth middleware: protect API routes server-side
  // In LOCAL_MODE we allow requests and stub a minimal req.oidc so downstream code can
@@ -1396,30 +1412,45 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
 
      // Render markdown to HTML on the server using the same simple renderer as the editor fallback.
      const rendered = simpleMarkdownToHtml(md);
+     // compute a small mobile-only footer (Local Mode or logout when authenticated)
+     let footerHtmlPub = '';
+     try {
+       const isLocal = LOCAL_MODE;
+       const isAuth = !!(req && req.oidc && req.oidc.isAuthenticated && req.oidc.isAuthenticated());
+       if (isLocal) {
+         footerHtmlPub = '<div id="mobileFooter" role="contentinfo" aria-hidden="false" style="color:#b71c1c;font-weight:700">Local Mode</div>';
+       } else if (isAuth) {
+         footerHtmlPub = '<div id="mobileFooter" role="contentinfo" aria-hidden="false"><a href="/logout" style="color:inherit;text-decoration:none">Log out</a></div>';
+ }
+     } catch (e) {
+       footerHtmlPub = '';
+     }
+     const mobileFooterStylesPub = '<style>@media (max-width:640px){#mobileFooter{position:fixed;left:0;right:0;bottom:0;z-index:99999;display:flex;justify-content:center;align-items:center;padding:10px;background:#fff;border-top:1px solid rgba(0,0,0,0.06);box-shadow:0 -6px 18px rgba(0,0,0,0.08);font-weight:700}#mobileFooter a{color:#111;text-decoration:none}}@media (min-width:641px){#mobileFooter{display:none !important}}</style>';
+ 
      const html = `<!doctype html>
- <html>
- <head>
- <meta charset="utf-8"/>
- <meta name="viewport" content="width=device-width,initial-scale=1"/>
- <title>${escapeHtml(userId)} / ${escapeHtml(storyId)}</title>
- <link rel="stylesheet" href="/write/style.css">
- <style>
-   body{font-family:Arial,Helvetica,sans-serif;max-width:900px;margin:24px auto;padding:16px}
-   .story-content img{max-width:100%;height:auto}
- </style>
- </head>
- <body>
- <main class="story-content">
- ${rendered}
- </main>
- </body>
- </html>`;
+  <html>
+  <head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>${escapeHtml(userId)} / ${escapeHtml(storyId)}</title>
+  <link rel="stylesheet" href="/write/style.css">
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;max-width:900px;margin:24px auto;padding:16px}
+    .story-content img{max-width:100%;height:auto}
+  </style>
+  </head>
+  <body>
+  <main class="story-content">
+  ${rendered}
+  </main>
+  ${mobileFooterStylesPub + (footerHtmlPub || '')}
+  </body>
+  </html>`;
      res.send(html);
    } catch (err) {
      res.status(500).send('failed to render published story');
    }
  });
-
  // Start server
  const PORT = process.env.PORT || 3000;
  app.listen(PORT, () => {

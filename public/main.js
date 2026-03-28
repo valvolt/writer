@@ -2491,6 +2491,14 @@ const MOBILE_THRESHOLD = 640;
 
 function computeMobileMode(threshold = MOBILE_THRESHOLD) {
   try {
+    // Allow forcing mobile mode for testing via URL (?mobile=1) or localStorage ('forceMobile' === '1').
+    try {
+      const params = (typeof URLSearchParams !== 'undefined') ? new URLSearchParams(window.location.search) : null;
+      if (params && params.get && params.get('mobile') === '1') return true;
+    } catch (e) {}
+    try {
+      if (localStorage && localStorage.getItem && localStorage.getItem('forceMobile') === '1') return true;
+    } catch (e) {}
     return (window.innerHeight > window.innerWidth) && (window.innerWidth < threshold);
   } catch (e) {
     return false;
@@ -3987,6 +3995,8 @@ function applyAuthStatus(status) {
       const isLocalNow2 = !!(localLabel2 && localLabel2.style && localLabel2.style.display !== 'none');
       ensureMobileFooter(isAuthNow2, isLocalNow2);
     } catch (e) {}
+    // Re-evaluate mobile mode after auth status is applied (covers Auth0 login flows)
+    try { updateMobileMode(); } catch (e) {}
 
   }
 
@@ -4253,7 +4263,16 @@ function ensureMobileFooter(isAuth, isLocal) {
    saveMainText,
    // expose mobile helpers
    mobileMode: !!(state && state.mobileMode),
-   updateMobileMode
+   updateMobileMode,
+   forceMobile: (on) => {
+     try {
+       if (on) localStorage.setItem('forceMobile', '1');
+       else localStorage.removeItem('forceMobile');
+     } catch (e) {
+       // ignore storage errors
+     }
+     try { updateMobileMode(); } catch (e) {}
+   }
  });
 
 (function() {

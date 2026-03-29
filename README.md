@@ -1,10 +1,8 @@
-# Writer — Local Story Editor
+# Writer — Story Editor
 
 ![Main UI](writer.png)
 
-A small editor for story writers. Because I felt **Scrivener** and **Manuskript** too feature-rich for my taste.
-
-Primarily made to be used offline on your local machine.
+A small editor for story writers, inspired by **Ghostwriter**. Because I felt **Scrivener** and **Manuskript** too feature-rich for my taste.
 
 ## Test it online
 - you will need to register a user
@@ -120,6 +118,10 @@ You can upload images anywhere, just right-click and select 'Upload image...'. T
 
 Images can illustrate your stories, or help you remember who is who and what is what when it comes to highlights.
 
+### speech-to-text
+
+If used from a Chrome-based browser, you can write by talking. Select your language and click the microphone icon. Speak normally. Click the icon again when you're done. Voice can be used for capturing text only, it can't be used to perform any other action such as formatting.
+
 ## Publishing
 
 Only you can see the stories you are working on. You can click 'Publish' to make your story public. It can then be read by anyone (no need to authenticate). It is not possible to 'unpublish' a story as of today. Please note that when you publish a story, all images will be copied over to the published folder (and thus take space on disk)
@@ -175,3 +177,8 @@ Besides highlights and and keywords, the following markdown-inspired syntax is s
 | `* * *` | ✦ ✦ ✦ (centered line) |
 | `->` | → (arrow) |
 | `<=` | ⇐ (double arrow) |
+
+## Mobile mode
+
+When used from a phone, the screen will switch to a phone-friendly, simplified UI. Some features (such as re-arranging Tiles) are not available in mobile mode. Turn your phone horizontally to switch back to the desktop-friendly UI.
+![Main UI](writer-mini.png)

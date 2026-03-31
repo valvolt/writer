@@ -796,6 +796,34 @@ async function refreshStories() {
     nameSpan.addEventListener('click', () => openStory(storyId));
     li.appendChild(nameSpan);
 
+    // Rename button (new): prompt and call API to rename a story in-place for the current user
+    const renameBtn = document.createElement('button');
+    renameBtn.className = 'story-rename';
+    renameBtn.textContent = 'Rename';
+    renameBtn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const newName = prompt('New story name', displayName);
+      if (newName === null) return;
+      const trimmed = String(newName || '').trim();
+      if (!trimmed) return alert('Enter a valid name');
+      if (trimmed === displayName) return;
+      try {
+        const res = await api.renameStory(storyId, trimmed);
+        if (!res || !res.ok) return alert(res && res.error ? res.error : 'Rename failed');
+        // If the renamed story was open, open the new name; otherwise just refresh list.
+        await refreshStories();
+        try {
+          if (state.currentStory === storyId || state.currentStory === displayName) {
+            openStory(res.name);
+          }
+        } catch (e) { /* non-fatal */ }
+      } catch (err) {
+        console.error('rename story failed', err);
+        alert('Rename failed');
+      }
+    });
+    li.appendChild(renameBtn);
+
     // delete button (asks for confirmation before deleting the story folder)
     const del = document.createElement('button');
     del.className = 'story-delete';

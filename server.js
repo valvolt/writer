@@ -545,22 +545,54 @@ app.post('/api/stories', requireAuth, (req, res) => {
   }
 });
 
-// Rename story
-app.post('/api/stories/:name/rename', requireAuth, (req, res) => {
-  const oldName = req.params.name;
-  const { newName } = req.body || {};
-  if (!newName) return res.status(400).json({ ok: false, error: 'newName is required' });
-  const from = storyPath(oldName);
-  const to = storyPath(newName);
-  if (!fs.existsSync(from)) return res.status(404).json({ ok: false, error: 'story not found' });
-  if (fs.existsSync(to)) return res.status(409).json({ ok: false, error: 'target name already exists' });
-  try {
-    fs.renameSync(from, to);
-    res.json({ ok: true, name: newName });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
+ // Rename story
+ app.post('/api/stories/:name/rename', requireAuth, (req, res) => {
+   const oldName = req.params.name;
+   const { newName } = req.body || {};
+   if (!newName) return res.status(400).json({ ok: false, error: 'newName is required' });
+   try {
+     // Resolve the story base and the owning user path (supports explicit "user/story" or implicit current user).
+     const { userId, base, userPath } = resolveBaseFlexible(req, oldName);
+     if (!base || !fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+ 
+     const oldSafe = path.basename(base);
+     const newSafe = safeName(newName);
+     const to = path.join(userPath, newSafe);
+ 
+     if (fs.existsSync(to)) return res.status(409).json({ ok: false, error: 'target name already exists' });
+ 
+     // Perform the filesystem rename (move the entire story directory)
+     fs.renameSync(base, to);
+ 
+     // If a project.json exists, update its name to reflect the new title.
+     try {
+       const projPath = path.join(to, 'project.json');
+       if (fs.existsSync(projPath)) {
+         const pm = JSON.parse(fs.readFileSync(projPath, 'utf8') || '{}');
+         pm.name = newName;
+         fs.writeFileSync(projPath, JSON.stringify(pm, null, 2), 'utf8');
+       }
+     } catch (e) {
+       // non-fatal: continue even if project.json update fails
+     }
+ 
+     // After moving, if a published markdown exists named with the old safe name,
+     // rename it to use the new safe name so the public route remains consistent.
+     try {
+       const oldPub = path.join(to, 'published', `${oldSafe}.md`);
+       const newPub = path.join(to, 'published', `${newSafe}.md`);
+       if (fs.existsSync(oldPub) && !fs.existsSync(newPub)) {
+         fs.renameSync(oldPub, newPub);
+       }
+     } catch (e) {
+       // non-fatal: do not abort rename on publish-file rename failure
+     }
+ 
+     return res.json({ ok: true, name: newName });
+   } catch (err) {
+     return res.status(500).json({ ok: false, error: err.message });
+   }
+ });
 
  // Get story content (characters, locations) and image lists
  app.get('/api/stories/:name', requireAuth, (req, res) => {

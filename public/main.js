@@ -653,8 +653,34 @@ function simpleMarkdownToHtml(md) {
     // images on their own line or inline / inline formatting for paragraphs
     let content = escapeHtml(raw).replace(/`([^`]+)`/g, '<code>$1</code>');
     try { content = typographicTransform(content); } catch (e) {}
+    // images: ![alt](url)
     content = content.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
       return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
+    });
+
+    // markdown links: [text](url) — allow only http(s) or absolute/relative paths starting with '/'
+    const _linkPlaceholders = [];
+    content = content.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, text, url) => {
+      try {
+        const uRaw = String(url || '').trim();
+        // allow only http(s) or root-relative paths
+        if (/^(https?:\/\/|\/)/i.test(uRaw)) {
+          const href = encodeURI(uRaw);
+          const anchor = `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(text)}</a>`;
+          const key = `__LINK_PLACEHOLDER_${_linkPlaceholders.length}__`;
+          _linkPlaceholders.push(anchor);
+          return key;
+        }
+        // not an allowed scheme — leave as escaped markdown text
+        return escapeHtml(_m);
+      } catch (e) {
+        return escapeHtml(_m);
+      }
+    });
+    
+    // restore markdown link placeholders
+    content = content.replace(/__LINK_PLACEHOLDER_(\d+)__/g, (_m, idx) => {
+      return _linkPlaceholders[Number(idx)] || '';
     });
     content = content
       .replace(/~~(.+?)~~/g, '<del>$1</del>')
@@ -2386,6 +2412,112 @@ editor.addEventListener('contextmenu', (ev) => {
 
   if (btnHl) customContextEl.appendChild(btnHl);
   customContextEl.appendChild(btnUpload);
+  // insert link button into the editor's custom context menu
+  const btnLink = document.createElement('button');
+  btnLink.textContent = 'Insert link...';
+  btnLink.addEventListener('click', (ev) => {
+    // determine insertion indices from the saved right-click selection, falling back to current selection
+    const s = (lastEditorSelection && typeof lastEditorSelection.start === 'number') ? lastEditorSelection.start : editor.selectionStart;
+    const epos = (lastEditorSelection && typeof lastEditorSelection.end === 'number') ? lastEditorSelection.end : editor.selectionEnd;
+    const selected = (typeof s === 'number' && typeof epos === 'number' && epos > s) ? editor.value.slice(s, epos) : '';
+
+    // build a small modal for single-step link input (text + URL)
+    const modal = document.createElement('div');
+    modal.className = 'custom-link-modal';
+    Object.assign(modal.style, {
+      position: 'fixed',
+      zIndex: 5000,
+      left: '50%',
+      top: '50%',
+      transform: 'translate(-50%, -50%)',
+      background: '#fff',
+      padding: '12px',
+      border: '1px solid #ddd',
+      borderRadius: '8px',
+      boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
+      minWidth: '320px'
+    });
+
+    const wrap = document.createElement('div');
+    wrap.style.display = 'flex';
+    wrap.style.flexDirection = 'column';
+    wrap.style.gap = '8px';
+
+    const lblText = document.createElement('label');
+    lblText.textContent = 'Link text';
+    lblText.style.fontSize = '13px';
+    const inputText = document.createElement('input');
+    inputText.type = 'text';
+    inputText.value = selected || '';
+    inputText.style.padding = '8px';
+    inputText.style.border = '1px solid #ddd';
+    inputText.style.borderRadius = '6px';
+
+    const lblUrl = document.createElement('label');
+    lblUrl.textContent = 'URL';
+    lblUrl.style.fontSize = '13px';
+    const inputUrl = document.createElement('input');
+    inputUrl.type = 'text';
+    inputUrl.value = (selected && /^(https?:\/\/|www\.)/i.test(selected)) ? selected : 'https://';
+    inputUrl.style.padding = '8px';
+    inputUrl.style.border = '1px solid #ddd';
+    inputUrl.style.borderRadius = '6px';
+
+    const row = document.createElement('div');
+    row.style.display = 'flex';
+    row.style.justifyContent = 'flex-end';
+    row.style.gap = '8px';
+    row.style.marginTop = '6px';
+
+    const btnCancel = document.createElement('button');
+    btnCancel.textContent = 'Cancel';
+    btnCancel.style.padding = '6px 10px';
+    const btnInsert = document.createElement('button');
+    btnInsert.textContent = 'Insert';
+    btnInsert.style.padding = '6px 10px';
+
+    row.appendChild(btnCancel);
+    row.appendChild(btnInsert);
+
+    wrap.appendChild(lblText);
+    wrap.appendChild(inputText);
+    wrap.appendChild(lblUrl);
+    wrap.appendChild(inputUrl);
+    wrap.appendChild(row);
+    modal.appendChild(wrap);
+    document.body.appendChild(modal);
+    try { inputText.focus(); } catch (e) {}
+
+    const cleanup = () => {
+      try { modal.remove(); } catch (e) {}
+    };
+
+    btnCancel.addEventListener('click', (e) => {
+      cleanup();
+      if (customContextEl) customContextEl.remove();
+    });
+
+    btnInsert.addEventListener('click', async (e) => {
+      let linkTextVal = (inputText.value || '').trim();
+      let urlVal = (inputUrl.value || '').trim();
+      if (!linkTextVal && selected) linkTextVal = selected;
+      if (!urlVal) { alert('Enter a URL'); return; }
+      if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(urlVal)) urlVal = 'https://' + urlVal;
+      const before = editor.value.slice(0, s);
+      const after = editor.value.slice(epos);
+      const md = `[${linkTextVal || urlVal}](${urlVal})`;
+      editor.value = before + md + after;
+      renderPreview();
+      try {
+        await saveMainText();
+      } catch (err) {
+        console.warn('autosave after link insert failed', err);
+      }
+      cleanup();
+      if (customContextEl) customContextEl.remove();
+    });
+  });
+  customContextEl.appendChild(btnLink);
   document.body.appendChild(customContextEl);
 });
 

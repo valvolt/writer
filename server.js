@@ -1393,32 +1393,62 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
        if (!inList) { html += '<ul>'; inList = true; }
        let content = li[1];
 
-       // escape and handle code spans first
-       content = escapeHtml(content)
-         .replace(/`([^`]+)`/g, '<code>$1</code>');
-       try { content = typographicTransform(content); } catch (e) { /* non-fatal */ }
-       content = content.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
-         return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
-       });
-       content = content
-         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-         .replace(/\*(.+?)\*/g, '<em>$1</em>');
-       html += `<li>${content}</li>`;
+        // escape and handle code spans first
+        content = escapeHtml(content)
+          .replace(/`([^`]+)`/g, '<code>$1</code>');
+        try { content = typographicTransform(content); } catch (e) { /* non-fatal */ }
+        // images: ![alt](url)
+        content = content.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
+          return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
+        });
+        // links: [text](url) — allow only http(s) or absolute relative paths starting with '/'
+        content = content.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, text, url) => {
+          const u = String(url || '').trim();
+          // allow http(s) or root-relative paths
+          if (/^(https?:\/\/|\/)/i.test(u)) {
+            try {
+              const href = encodeURI(u);
+              return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(text)}</a>`;
+            } catch (e) {
+              return escapeHtml(_m);
+            }
+          }
+          // not an allowed scheme — leave as escaped markdown text
+          return escapeHtml(_m);
+        });
+        content = content
+          .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+          .replace(/\*(.+?)\*/g, '<em>$1</em>');
+        html += `<li>${content}</li>`;
        continue;
      } else {
        if (inList) { html += '</ul>'; inList = false; }
      }
 
-     // process inline elements for paragraphs
-     let paragraph = escapeHtml(raw)
-       .replace(/`([^`]+)`/g, '<code>$1</code>');
-     try { paragraph = typographicTransform(paragraph); } catch (e) { /* non-fatal */ }
-     paragraph = paragraph
-       .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
-         return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
-       })
-       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-       .replace(/\*(.+?)\*/g, '<em>$1</em>');
+      // process inline elements for paragraphs
+      let paragraph = escapeHtml(raw)
+        .replace(/`([^`]+)`/g, '<code>$1</code>');
+      try { paragraph = typographicTransform(paragraph); } catch (e) { /* non-fatal */ }
+      paragraph = paragraph
+        // images first
+        .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
+          return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
+        })
+        // links: [text](url) — allow only http(s) or absolute relative paths starting with '/'
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, text, url) => {
+          const u = String(url || '').trim();
+          if (/^(https?:\/\/|\/)/i.test(u)) {
+            try {
+              const href = encodeURI(u);
+              return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(text)}</a>`;
+            } catch (e) {
+              return escapeHtml(_m);
+            }
+          }
+          return escapeHtml(_m);
+        })
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g, '<em>$1</em>');
 
      if (paragraph.trim() === '') {
        html += '';

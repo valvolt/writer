@@ -1759,7 +1759,9 @@ async function refreshTiles() {
       } else {
         titleSpan.style.fontWeight = '500';
       }
-      titleSpan.addEventListener('click', async () => {
+      titleSpan.addEventListener('click', async (e) => {
+        // Ignore clicks that immediately follow a drag operation to avoid lost/duplicated interaction.
+        if (window._tileDragActive) return;
         // open tile in editor
         // set view immediately so other lists (highlights) un-bold right away
         state.currentView = { type: 'tile', id: t.id };
@@ -1849,6 +1851,8 @@ async function refreshTiles() {
         li.style.opacity = '0.5';
         // mark dragged item
         li.classList.add('dragging');
+        // mark global drag-active so click handlers can ignore the click that often follows a drag
+        window._tileDragActive = true;
       });
       li.addEventListener('dragend', (e) => {
         li.style.opacity = '1';
@@ -1857,6 +1861,9 @@ async function refreshTiles() {
         Array.from(tileList.children).forEach(n => {
           n.classList.remove('drop-before', 'drop-after');
         });
+        // clear the global drag-active flag after native click processing completes
+        // use setTimeout(..., 0) to ensure any click events that follow the dragend are suppressed by the flag
+        setTimeout(() => { window._tileDragActive = false; }, 0);
       });
 
       li.addEventListener('dragenter', (e) => {

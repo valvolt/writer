@@ -47,19 +47,19 @@ Type 'my story' and click Create
 
 ### Tiles
 
-Tiles are text sections. Type 'chapter one' and click Add Tile. You can always rename your tile. Click 'Chapter one', the top window will say 'my story - Chapter one'.
+Tiles are text sections. The first tile, named 'Chapter 1', is auto-generated and selected so that you can type right away. This tile, and all other tiles, can be renamed.
 
 You can type your story in the editor window. Text will be rendered on the right panel. The editor supports some markdown elements such as headers, non-numbered lists, italic and bold.
 
 Type '# Chapter One'
 
-Create a second tile named 'chapter two'. Select it by clicking on it.
+Create a second tile named 'Chapter 2'. Select it by clicking on it.
 
 Type '# Chapter Two'
 
 Click on 'my story'. The rendering pane should say 'Chapter one' then 'Chapter two'.
 
-Drag and drop tile 'Chapter two' on top of tile 'Chapter one'. See how the rendering pane now says 'Chapter two' then 'Chapter one'.
+Drag and drop tile 'Chapter 2' on top of tile 'Chapter 1'. See how the rendering pane now says 'Chapter two' then 'Chapter one'.
 
 The tile system is how you can break your story in chunk and reorganize them any way you want.
 
@@ -73,18 +73,18 @@ There are two ways to create a highlight. Let's explore both.
 
 Option 1: contextual menu
 
-- Click on tile Chapter one.
+- Click on tile Chapter 1.
 - Below the text 'Chapter One', type Alice meets with Bob in the forrest.
 - With the mouse, select 'Alice' and do a right-click. Click 'Make "Alice" a highlight'.
 - See how a new Highlight named Alice appeared.
-- See how the word 'Alice' is now underscored in the rendering pane of Chapter One.
+- See how the word 'Alice' is now underscored in the rendering pane of Chapter 1.
 
 
 Option 2: input field
 
 - In the left menu, enter 'Bob' under Highlights and click Add
 - See how a new Highlight named Bob appeared.
-- See how the word 'Bob' is now underscored in the rendering pane of Chapter One.
+- See how the word 'Bob' is now underscored in the rendering pane of Chapter 1.
 
 - Choose whatever approach you prefer to create a highlight named 'forrest'.
 
@@ -96,13 +96,13 @@ Tags are namely used to manage highlight.
 - Do the same with 'Bob'.
 - For 'forrest', use tag #location
 
-Click the tile 'Chapter one', see how the words Alice, Bob and forrest are now rendered.
+Click the tile 'Chapter 1', see how the words Alice, Bob and forrest are now rendered.
 
 In the left menu, click tag 'location'. See how the forrest now appears on top. If you want all characters to be on top, simply click tag 'character'
 
 You can also order highlights by alphabetical order, or by number of times they appear in the story.
 
-If you remove all occurrences of a highlight, you can delete it (a delete button will appear)
+If you remove all occurrences of a highlight, you can delete that highlight (a delete button will appear)
 
 If you rename a highlight, it will rename all its occurences in the text. This can be useful if you want to rename a character, for example.
 
@@ -118,9 +118,15 @@ You can upload images anywhere, just right-click and select 'Upload image...'. T
 
 Images can illustrate your stories, or help you remember who is who and what is what when it comes to highlights.
 
+### links
+
+You can insert hyperlinks anywhere, just right-click and select 'Insert link...'. The hyperlink will be rendered on the right pane. The link will open in a new tab.
+
+If you select text prior to right-clicking, this text will be used as the link.
+
 ### speech-to-text
 
-If used from a Chrome-based browser, you can write by talking. Select your language and click the microphone icon. Speak normally. Click the icon again when you're done. Voice can be used for capturing text only, it can't be used to perform any other action such as formatting.
+If used from a Chrome-based browser (on a computer or on an Android phone), you can write by talking. Select your language and click the microphone icon. Speak normally. Click the icon again when you're done. Voice can be used for capturing text only, it can't be used to perform any other action such as formatting.
 
 ## Publishing
 
@@ -180,5 +186,5 @@ Besides highlights and and keywords, the following markdown-inspired syntax is s
 
 ## Mobile mode
 
-When used from a phone, the screen will switch to a phone-friendly, simplified UI. Some features (such as re-arranging Tiles) are not available in mobile mode. Turn your phone horizontally to switch back to the desktop-friendly UI.
+When used from a phone, the screen will switch to a phone-friendly, simplified UI. Some features (such as re-arranging Tiles) are not available in mobile mode. Speech-to-text will work only on Android phone, from Chrome-based browser. Turn your phone horizontally to switch back to the desktop-friendly UI.
 ![Main UI](writer-mini.png)

@@ -893,7 +893,35 @@ createStoryBtn.addEventListener('click', async () => {
   if (!res || !res.ok) return alert(res && res.error ? res.error : 'Create failed');
   newStoryName.value = '';
   await refreshStories();
-  openStory(res.name);
+  // Ensure the story UI is initialized first
+  await openStory(res.name);
+
+  // Frontend-only: create an initial "Chapter1" tile and open it for editing.
+  // Duplicate tile titles are acceptable per user instruction.
+  try {
+    const tRes = await api.createTile(state.currentStory, 'Chapter 1', '');
+    if (tRes && tRes.ok) {
+      // mark view and update header to show active tile
+      state.currentView = { type: 'tile', id: tRes.id };
+      try { 
+        currentStoryTitle.textContent = `${state.currentStory} - ${(tRes.tile && tRes.tile.title) ? tRes.tile.title : 'Chapter 1'}`;
+      } catch (e) {}
+
+      // Refresh tiles so the new tile is rendered in the sidebar
+      await refreshTiles();
+
+      // Fetch created tile content and open it in the editor
+      const got = await api.getTile(state.currentStory, tRes.id);
+      if (got && got.ok) {
+        editor.value = got.content || '';
+        setEditorEnabled(true);
+        renderPreview();
+        try { editor.focus(); } catch (e) {}
+      }
+    }
+  } catch (e) {
+    console.warn('auto-create Chapter 1 failed', e);
+  }
 });
 
 /* Single-click on the story title shows the concatenated, read-only content of all tiles.

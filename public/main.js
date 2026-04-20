@@ -583,8 +583,22 @@ function simpleMarkdownToHtml(md) {
       // normalize/format content (reuse existing logic)
       let content = escapeHtml(contentRaw).replace(/`([^`]+)`/g, '<code>$1</code>');
       try { content = typographicTransform(content); } catch (e) {}
+      // images first
       content = content.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
         return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
+      });
+      // links inside list items: convert [text](url) to anchors (allow http(s) or root-relative)
+      content = content.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, text, url) => {
+        try {
+          const uRaw = String(url || '').trim();
+          if (/^(https?:\/\/|\/)/i.test(uRaw)) {
+            const href = encodeURI(uRaw);
+            return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(text)}</a>`;
+          }
+          return escapeHtml(_m);
+        } catch (e) {
+          return escapeHtml(_m);
+        }
       });
       content = content
         .replace(/~~(.+?)~~/g, '<del>$1</del>')
@@ -2459,13 +2473,17 @@ editor.addEventListener('contextmenu', (ev) => {
   if (btnHl) customContextEl.appendChild(btnHl);
   customContextEl.appendChild(btnUpload);
   // insert link button into the editor's custom context menu
-  const btnLink = document.createElement('button');
-  btnLink.textContent = 'Insert link...';
-  btnLink.addEventListener('click', (ev) => {
-    // determine insertion indices from the saved right-click selection, falling back to current selection
-    const s = (lastEditorSelection && typeof lastEditorSelection.start === 'number') ? lastEditorSelection.start : editor.selectionStart;
-    const epos = (lastEditorSelection && typeof lastEditorSelection.end === 'number') ? lastEditorSelection.end : editor.selectionEnd;
-    const selected = (typeof s === 'number' && typeof epos === 'number' && epos > s) ? editor.value.slice(s, epos) : '';
+    const btnLink = document.createElement('button');
+    if (selected && selected.length > 0) {
+      btnLink.textContent = `Make "${selected}" a link`;
+    } else {
+      btnLink.textContent = 'Insert link...';
+    }
+    btnLink.addEventListener('click', (ev) => {
+      // determine insertion indices from the saved right-click selection, falling back to current selection
+      const s = (lastEditorSelection && typeof lastEditorSelection.start === 'number') ? lastEditorSelection.start : editor.selectionStart;
+      const epos = (lastEditorSelection && typeof lastEditorSelection.end === 'number') ? lastEditorSelection.end : editor.selectionEnd;
+      const selected = (typeof s === 'number' && typeof epos === 'number' && epos > s) ? editor.value.slice(s, epos) : '';
 
     // build a small modal for single-step link input (text + URL)
     const modal = document.createElement('div');

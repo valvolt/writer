@@ -757,14 +757,16 @@ function updateCounters(totalText, currentText) {
   }
 }
 
-function countOccurrences(text, name) {
+  function countOccurrences(text, name) {
   // guard: name required
   if (!name) return 0;
   // coerce non-strings to safe string values (defensive: avoids .match TypeError)
   if (typeof text !== 'string') text = String(text || '');
   if (!text) return 0;
   // Use whole-word, case-sensitive matching for counts (aligns with UI highlight behavior).
-  const re = new RegExp(`\\b${escapeRegExp(name)}\\b`, 'g');
+  // Treat Unicode letters (including accented characters) and numbers as word characters
+  // so "test" does not match "testé". Use the Unicode 'u' flag.
+  const re = new RegExp(`(^|[^\\p{L}\\p{N}_])${escapeRegExp(name)}($|[^\\p{L}\\p{N}_])`, 'gu');
   const m = text.match(re);
   return m ? m.length : 0;
 }
@@ -2103,11 +2105,20 @@ function renderPreview() {
     // collect matches across all entity names
     const matches = [];
     for (const item of combined) {
-      // Use case-sensitive matching (no 'i' flag) and whole-word boundaries.
-      const re = new RegExp(`\\b${escapeRegExp(item.name)}\\b`, 'g');
+      // Use case-sensitive matching (no 'i' flag).
+      // Match the entity name when surrounded by non-word boundaries; allow surrounding
+      // punctuation/quotes by matching a non-word char before/after and capturing the name.
+      // We compute the actual name index from the capture groups so replacements stay aligned.
+      const re = new RegExp(`(^|[^\\p{L}\\p{N}_])(${escapeRegExp(item.name)})($|[^\\p{L}\\p{N}_])`, 'gu');
       let m;
       while ((m = re.exec(txt)) !== null) {
-        matches.push({ index: m.index, text: m[0], name: item.name, cls: item.cls, length: m[0].length });
+        // m[1] is the prefix (maybe empty), m[2] is the actual name match
+        const prefixLen = m[1] ? m[1].length : 0;
+        const nameIndex = m.index + prefixLen;
+        const nameText = m[2];
+        matches.push({ index: nameIndex, text: nameText, name: item.name, cls: item.cls, length: nameText.length });
+        // safeguard: avoid infinite loop if regex makes zero-width progress
+        if (re.lastIndex === m.index) re.lastIndex++;
       }
     }
       if (matches.length === 0) return;

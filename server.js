@@ -276,9 +276,9 @@ function storyPath(name) {
  // Helper to escape HTML for safe embedding in server-rendered pages
  function escapeHtml(s) {
    return String(s || '')
-     .replace(/&/g, '&')
-     .replace(/</g, '<')
-     .replace(/>/g, '>');
+     .replace(/&/g, '&amp;')
+     .replace(/</g, '&lt;')
+     .replace(/>/g, '&gt;');
  }
 
 // Typographic transforms helper (server-side):
@@ -1324,9 +1324,9 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
 
    function escapeHtml(s) {
      return String(s)
-       .replace(/&/g, '&')
-       .replace(/</g, '<')
-       .replace(/>/g, '>');
+       .replace(/&/g, '&amp;')
+       .replace(/</g, '&lt;')
+       .replace(/>/g, '&gt;');
    }
 
    // iterate lines by index so we can group consecutive lines (useful for blockquotes)

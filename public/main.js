@@ -304,6 +304,15 @@ function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function escapeHtml(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '"')
+    .replace(/'/g, '&#39;');
+}
+
 // Typographic transforms helper (used by client preview):
 // - "..." -> …
 // - "--"  -> —
@@ -516,12 +525,7 @@ function simpleMarkdownToHtml(md) {
   // parallel stack tracking whether the last <li> at each list level is still open
   const liOpenStack = [];
 
-  function escapeHtml(s) {
-    return String(s || '')
-      .replace(/&/g, '&')
-      .replace(/</g, '<')
-      .replace(/>/g, '>');
-  }
+  // use global escapeHtml for consistent escaping across renderer paths
 
   // iterate by index so we can group consecutive lines (useful for blockquotes)
   for (let i = 0; i < lines.length; i++) {
@@ -1111,9 +1115,9 @@ async function openStory(name) {
           console.warn('failed to load tile during openStory', t.id, e);
         }
       }
-      const html = (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function')
-        ? (marked.parse(combined || ''))
-        : simpleMarkdownToHtml(combined || '');
+    const html = (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function')
+      ? (marked.parse(escapeHtml(combined || '')))
+      : simpleMarkdownToHtml(combined || '');
       preview.innerHTML = html || '<div class="empty-preview">[no tiles]</div>';
       try {
         const logoutBtnF = document.getElementById('logoutBtn');
@@ -2291,7 +2295,9 @@ function onEntityHover(ev) {
   }
 
   const h = document.createElement('div');
-  h.innerHTML = `<strong>${entry.title}</strong>`;
+  const strong = document.createElement('strong');
+  strong.textContent = entry.title;
+  h.appendChild(strong);
   tooltipEl.appendChild(h);
 
   if (entry.desc) {
@@ -4424,8 +4430,31 @@ function ensureMobileFooter(isAuth, isLocal) {
              infoEl.style.zIndex = 9999;
              document.body.appendChild(infoEl);
            }
-           infoEl.innerHTML = `Published ✓ — <a href="${pubRoute}" target="_blank" style="color:#fff;text-decoration:underline">View story</a>`;
-           // auto-dismiss after 10s
+          // build info element safely to avoid interpolated HTML
+          infoEl.innerHTML = '';
+          try {
+            const textSpan = document.createElement('span');
+            textSpan.textContent = 'Published ✓ — ';
+            infoEl.appendChild(textSpan);
+            const a = document.createElement('a');
+            const safeHref = String(pubRoute || '');
+            if (/^(https?:\/\/|\/)/i.test(safeHref)) {
+              a.href = encodeURI(safeHref);
+              a.target = '_blank';
+              a.rel = 'noopener noreferrer';
+              a.style.color = '#fff';
+              a.style.textDecoration = 'underline';
+              a.textContent = 'View story';
+              infoEl.appendChild(a);
+            } else {
+              const fallback = document.createElement('span');
+              fallback.textContent = 'View story';
+              infoEl.appendChild(fallback);
+            }
+          } catch (e) {
+            infoEl.textContent = 'Published ✓ — View story';
+          }
+          // auto-dismiss after 10s
            setTimeout(() => {
              try { const el = document.getElementById(infoId); if (el) el.remove(); } catch (e) {}
            }, 10000);

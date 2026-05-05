@@ -1497,8 +1497,8 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
      let md = '';
      try { md = fs.readFileSync(pubPath, 'utf8'); } catch (e) { return res.status(500).send('failed to read published story'); }
 
-     // Render markdown to HTML on the server using the same simple renderer as the editor fallback.
-     const rendered = simpleMarkdownToHtml(md);
+      // Render markdown to HTML on the server using the table-aware renderer (falls back to simple renderer).
+      const rendered = renderMarkdownWithTables(md);
      // compute a small mobile-only footer (Local Mode or logout when authenticated)
      let footerHtmlPub = '';
      try {

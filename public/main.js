@@ -82,19 +82,36 @@ async function updatePublishButtonState() {
 
   // Determine authentication status from the server to avoid races with UI updates.
   let isAuth = false;
-  try {
-    const st = await fetch('/api/auth-status').then(r => r.json()).catch(() => null);
-    isAuth = !!(st && st.ok && st.authenticated);
-  } catch (e) {
-    isAuth = false;
-  }
+            try {
+             const u = body.url;
+             // Expecting something like: /stories/<userId>/<storyId>/published/<name>.md
+             const m = u.match(/^\/stories\/([^\/]+)\/([^\/]+)\/published\/([^\/]+)\.md$/);
+             if (m) {
+               // user part is expected to be a single-encoding; decode once for safety.
+               const user = decodeURIComponent(m[1]);
 
-  // If not authenticated or no story open, hide/disable publish
-  if (!isAuth || !state.currentStory) {
-    publishBtn.style.display = isAuth ? 'inline-block' : 'none';
-    publishBtn.disabled = true;
-    return;
-  }
+               // The story part may be encoded multiple times by intermediate storage systems.
+               // Decode repeatedly until it stabilizes so we avoid producing double-encoded links
+               // like "XM%2520Cyber". This loop is defensive and will stop if decodeURIComponent
+               // throws or the value no longer changes.
+               let storyRaw = m[2];
+               try {
+                 let prev;
+                 do {
+                   prev = storyRaw;
+                   storyRaw = decodeURIComponent(storyRaw);
+                 } while (storyRaw !== prev);
+               } catch (err) {
+                 // If decoding ever fails, fall back to the original captured value.
+                 storyRaw = m[2];
+               }
+
+               pubRoute = `/published/${encodeURIComponent(user)}/${encodeURIComponent(storyRaw)}`;
+             }
+           } catch (e) {
+             // fallback to body.url if parsing fails
+             pubRoute = body.url;
+           }
 
   publishBtn.style.display = 'inline-block';
   publishBtn.disabled = true;
@@ -1117,7 +1134,7 @@ async function openStory(name) {
       }
     const html = (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function')
       ? (marked.parse(escapeHtml(combined || '')))
-      : simpleMarkdownToHtml(combined || '');
+      : renderMarkdownWithTables(combined || '');
       preview.innerHTML = html || '<div class="empty-preview">[no tiles]</div>';
       try {
         const logoutBtnF = document.getElementById('logoutBtn');
@@ -2254,6 +2271,191 @@ async function renderMermaidBlocksInPreview(root, blocks) {
 
 /* Improved preview rendering: render markdown then wrap ALL entity occurrences (multi-match, multi-word, longest-first).
    NOTE: renderPreview now renders markdown even when no story is opened so the right pane always shows live preview. */
+
+/*
+  renderMarkdownWithTables(md)
+  - Pre-processes the incoming markdown and detects simple GFM-style tables.
+  - Replaces each table block with a unique marker so the existing simpleMarkdownToHtml
+    renderer can process the remaining markdown unchanged.
+  - After rendering, replaces escaped markers with the generated table HTML (safe insertion).
+  This approach keeps the large simpleMarkdownToHtml function untouched while adding
+  robust table rendering (including alignment via the separator row).
+*/
+function renderMarkdownWithTables(md) {
+  // If nothing to do, fall back to the existing renderer directly.
+  if (!md) return simpleMarkdownToHtml(md);
+
+  // Helpers
+  function splitCells(line) {
+    // remove leading/trailing pipe, then split on '|' and trim cells
+    let s = String(line || '');
+    // Normalize common escaped sequences - basic approach (improvement possible later)
+    // Remove leading/trailing pipe to make splitting predictable
+    if (s.trim().startsWith('|')) s = s.replace(/^\s*\|/, '');
+    if (s.trim().endsWith('|')) s = s.replace(/\|\s*$/, '');
+    return s.split('|').map(c => c.trim());
+  }
+
+  function parseAlignments(sepLine) {
+    const parts = splitCells(sepLine);
+    return parts.map(p => {
+      const t = p.trim();
+      const left = t.startsWith(':');
+      const right = t.endsWith(':');
+      if (left && right) return 'center';
+      if (right) return 'right';
+      // By default use left alignment for table cells when unspecified.
+      return 'left';
+    });
+  }
+
+  function inlineFormat(text) {
+    // Reuse the same escaping/inline rules used elsewhere in the renderer so table cells
+    // look identical to paragraph/list content.
+    if (!text && text !== '') return '';
+    let out = String(text || '');
+
+    // code spans first (render as <code>)
+    out = out.replace(/`([^`]+)`/g, (_m, p1) => `<code>${escapeHtml(p1)}</code>`);
+
+    // escape remaining HTML but avoid double-escaping the code spans we already injected.
+    // Since code spans were inserted as actual <code> tags, escape other content now.
+    // To avoid escaping the inserted <code> tags, temporarily replace them with placeholders.
+    const codePlaceholders = [];
+    out = out.replace(/<code>[\s\S]*?<\/code>/g, (m) => {
+      const key = `__CODE_PLACEHOLDER_${codePlaceholders.length}__`;
+      codePlaceholders.push(m);
+      return key;
+    });
+
+    out = escapeHtml(out);
+
+    // restore code placeholders (they were escaped by escapeHtml, so unescape placeholders)
+    out = out.replace(/__CODE_PLACEHOLDER_(\d+)__/g, (_m, idx) => codePlaceholders[Number(idx)] || '');
+
+    // typographic transforms (keep consistent with preview)
+    try { out = typographicTransform(out); } catch (e) {}
+
+    // images: ![alt](url)
+    out = out.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
+      return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
+    });
+
+    // links: [text](url) — allow only http(s) or root-relative
+    out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, text, url) => {
+      try {
+        const uRaw = String(url || '').trim();
+        if (/^(https?:\/\/|\/)/i.test(uRaw)) {
+          const href = encodeURI(uRaw);
+          return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(text)}</a>`;
+        }
+        return escapeHtml(_m);
+      } catch (e) {
+        return escapeHtml(_m);
+      }
+    });
+
+    // simple inline formatting: strike, bold, italic (same order as main renderer)
+    out = out
+      .replace(/~~(.+?)~~/g, '<del>$1</del>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+    return out;
+  }
+
+  // Table detection and extraction pass: produce a modified markdown with markers
+  const lines = md.split(/\r?\n/);
+  const outLines = [];
+  const tableMap = {};
+  let i = 0;
+  let tableIndex = 0;
+
+  // Separator regex: matches lines like:
+  // | --- | :---: | ---: |
+  // or   --- | --- | :---:
+  const sepRe = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/;
+
+  while (i < lines.length) {
+    line = lines[i] || '';
+    const next = lines[i + 1] || '';
+
+    if (line.indexOf('|') !== -1 && next && sepRe.test(next)) {
+      // We've found a table header + separator
+      const headerLine = line;
+      const sepLine = next;
+      const rows = [];
+      let j = i + 2;
+      while (j < lines.length) {
+        const candidate = lines[j] || '';
+        // Stop when we hit a blank line or a line that doesn't contain a pipe (not a table row)
+        if (!candidate.includes('|')) break;
+        rows.push(candidate);
+        j++;
+      }
+
+      // Build table HTML
+      const headers = splitCells(headerLine);
+      const aligns = parseAlignments(sepLine);
+      const bodyRows = rows.map(r => splitCells(r));
+
+      // normalize number of columns to headers length
+      const cols = headers.length;
+
+      let tableHtml = '<table>';
+      // thead
+      tableHtml += '<thead><tr>';
+      for (let c =0; c < cols; c++) {
+        const h = headers[c] || '';
+        const align = aligns[c] || 'left';
+        const style = ` style="text-align:${align};"`;
+        tableHtml += `<th${style}>${inlineFormat(h)}</th>`;
+      }
+      tableHtml += '</tr></thead>';
+
+      // tbody
+      tableHtml += '<tbody>';
+      for (const r of bodyRows) {
+        tableHtml += '<tr>';
+        for (let c = 0; c < cols; c++) {
+          const cell = r[c] || '';
+          const align = aligns[c] || 'left';
+          const style = ` style="text-align:${align};"`;
+          tableHtml += `<td${style}>${inlineFormat(cell)}</td>`;
+        }
+        tableHtml += '</tr>';
+      }
+      tableHtml += '</tbody></table>';
+
+      const marker = `%%TABLE_BLOCK_${tableIndex}%%`;
+      tableMap[marker] = tableHtml;
+      outLines.push(marker);
+      tableIndex++;
+      i = j;
+      continue;
+    }
+
+    // Not a table header — keep line as-is
+    outLines.push(line);
+    i++;
+  }
+
+  const modifiedMd = outLines.join('\n');
+
+  // Render using existing renderer
+  const rendered = simpleMarkdownToHtml(modifiedMd);
+
+  // Replace escaped markers (the renderer will have escaped the marker text) with the actual table HTML.
+  // The marker appears escaped as escapeHtml(marker) in the output; perform replacement safely.
+  let final = rendered;
+  for (const marker in tableMap) {
+    const escapedMarker = escapeHtml(marker);
+    final = final.split(escapedMarker).join(tableMap[marker]);
+  }
+
+  return final;
+}
+
 function renderPreview() {
   try {
     // When the UI is showing the full concatenated tiles view we must not
@@ -2268,7 +2470,7 @@ function renderPreview() {
     try { console.log('[debug] typeof marked =', typeof marked); } catch (e) { console.warn('cannot log marked type', e); }
     // Use the simple renderer by default.
     let html = '';
-    html = simpleMarkdownToHtml(mdForRender || '');
+    html = renderMarkdownWithTables(mdForRender || '');
     try {
       console.log('[debug] rendered HTML preview (first 1000 chars):', (html || '').slice(0, 1000));
     } catch (e) {
@@ -3701,7 +3903,7 @@ async function renderMobileEntityEditor(type, storyName, id, title) {
       try {
         if (!showingPreview) {
           // render markdown into previewWrap
-          const html = simpleMarkdownToHtml(ta.value || '');
+          const html = renderMarkdownWithTables(ta.value || '');
           previewWrap.innerHTML = html || '<div class="empty-preview">[preview empty]</div>';
           try { renderTags(previewWrap); } catch (e) {}
           previewWrap.style.display = 'block';

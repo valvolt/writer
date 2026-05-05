@@ -1321,6 +1321,8 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
     let html = '';
     let inList = false;
     let inTaskList = false;
+    const listStack = [];
+    const liOpenStack = [];
 
     function escapeHtml(s) {
       return String(s)
@@ -1411,14 +1413,29 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
        continue;
      }
 
-     // unordered lists (- or *) 
-     const li = cleaned.match(/^\s*[-*]\s+(.*)$/);
+     // unordered lists (- or *) — supports nested lists via indentation ( spaces per level)
+     const li = cleaned.match(/^(\s*)[-*]\s+(.*)$/);
      if (li) {
        if (inTaskList) { html += '</ul>'; inTaskList = false; }
-       if (!inList) { html += '<ul>'; inList = true; }
-       let content = li[1];
+       // compute nesting level (treat a tab as 4 spaces)
+       const indent = (li[1] || '').replace(/\t/g, '    ');
+       const level = Math.max(0, Math.floor(indent.length / 2));
 
-        // escape and handle code spans first
+       // open lists until we reach desired depth
+       while (listStack.length <= level) { html += '<ul>'; listStack.push('ul'); liOpenStack.push(false); }
+
+       // close deeper lists if current line is shallower
+       while (listStack.length > level + 1) {
+         if (liOpenStack[liOpenStack.length - 1]) { html += '</li>'; liOpenStack[liOpenStack.length - 1] = false; }
+         html += '</ul>'; listStack.pop(); liOpenStack.pop();
+       }
+
+       // close previous <li> at current level if it was open
+       if (liOpenStack.length && liOpenStack[liOpenStack.length - 1]) { html += '</li>'; liOpenStack[liOpenStack.length - 1] = false; }
+
+       let content = li[2];
+
+        // escape and handle spans first
         content = escapeHtml(content)
           .replace(/`([^`]+)`/g, '<code>$1</code>');
         try { content = typographicTransform(content); } catch (e) { /* non-fatal */ }
@@ -1444,10 +1461,16 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
         content = content
           .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
           .replace(/\*(.+?)\*/g, '<em>$1</em>');
-        html += `<li>${content}</li>`;
+        // open a <li> for this level (do not immediately close it — nested lists will be appended inside)
+        html += `<li>${content}`;
+        liOpenStack[liOpenStack.length - 1] = true;
        continue;
      } else {
-       if (inList) { html += '</ul>'; inList = false; }
+       // close all open lists when we hit a non-list line
+       while (listStack.length) {
+         if (liOpenStack[liOpenStack.length - 1]) { html += '</li>'; liOpenStack[liOpenStack.length - 1] = false; }
+         html += '</ul>'; listStack.pop(); liOpenStack.pop();
+       }
      }
 
       // process inline elements for paragraphs
@@ -1482,7 +1505,11 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
      }
    }
 
-   if (inList) html += '</ul>';
+   // close any remaining open lists
+   while (listStack.length) {
+     if (liOpenStack[liOpenStack.length - 1]) { html += '</li>'; liOpenStack[liOpenStack.length - 1] = false; }
+     html += '</ul>'; listStack.pop(); liOpenStack.pop();
+   }
    return html;
  }
 

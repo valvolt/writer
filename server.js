@@ -1486,6 +1486,190 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
    return html;
  }
 
+/*
+  Server-side table-aware renderer (ported from client preview renderer).
+
+  Approach:
+  - Detect simple GFM-style table blocks (header row + separator row like |---|:---:|---:|).
+  - Replace table blocks with unique markers, run the existing simpleMarkdownToHtml on the
+    modified markdown, then replace the escaped markers with the generated table HTML.
+  - Use escapeHtml and typographicTransform already defined in this file to keep behavior
+    consistent with the preview renderer.
+*/
+function renderMarkdownWithTables(md) {
+  // If nothing to do, fall back to the existing renderer directly.
+  if (!md) return simpleMarkdownToHtml(md);
+
+  // Helpers
+  function splitCells(line) {
+    // remove leading/trailing pipe, then split on '|' and trim cells
+    let s = String(line || '');
+    // Remove leading/trailing pipe to make splitting predictable
+    if (s.trim().startsWith('|')) s = s.replace(/^\s*\|/, '');
+    if (s.trim().endsWith('|')) s = s.replace(/\|\s*$/, '');
+    return s.split('|').map(c => c.trim());
+  }
+
+  function parseAlignments(sepLine) {
+    const parts = splitCells(sepLine);
+    return parts.map(p => {
+      const t = p.trim();
+      const left = t.startsWith(':');
+      const right = t.endsWith(':');
+      if (left && right) return 'center';
+      if (right) return 'right';
+      // By default use left alignment for table cells when unspecified.
+      return 'left';
+    });
+  }
+
+  function inlineFormat(text) {
+    // Reuse the same escaping/inline rules used elsewhere in the renderer so table cells
+    // look identical to paragraph/list content.
+    if (text === undefined || text === null) return '';
+    let out = String(text || '');
+
+    // code spans first (render as <code>)
+    out = out.replace(/`([^`]+)`/g, (_m, p1) => `<code>${escapeHtml(p1)}</code>`);
+
+    // escape remaining HTML but avoid double-escaping the code spans we already injected.
+    // Since code spans were inserted as actual <code> tags, escape other content now.
+    // To avoid escaping the inserted <code> tags, temporarily replace them with placeholders.
+    const codePlaceholders = [];
+    out = out.replace(/<code>[\s\S]*?<\/code>/g, (m) => {
+      const key = `__CODE_PLACEHOLDER_${codePlaceholders.length}__`;
+      codePlaceholders.push(m);
+      return key;
+    });
+
+    out = escapeHtml(out);
+
+    // restore code placeholders
+    out = out.replace(/__CODE_PLACEHOLDER_(\d+)__/g, (_m, idx) => codePlaceholders[Number(idx)] || '');
+
+    // typographic transforms (keep consistent with preview)
+    try { out = typographicTransform(out); } catch (e) {}
+
+    // images: ![alt](url)
+    out = out.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
+      return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
+    });
+
+    // links: [text](url) — allow only http(s) or root-relative
+    out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, text, url) => {
+      try {
+        const uRaw = String(url || '').trim();
+        if (/^(https?:\/\/|\/)/i.test(uRaw)) {
+          const href = encodeURI(uRaw);
+          return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(text)}</a>`;
+        }
+        return escapeHtml(_m);
+      } catch (e) {
+        return escapeHtml(_m);
+      }
+    });
+
+    // simple inline formatting: strike, bold, italic (same order as main renderer)
+    out = out
+      .replace(/~~(.+?)~~/g, '<del>$1</del>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+    return out;
+  }
+
+  // Table detection and extraction pass: produce a modified markdown with markers
+  const lines = String(md).split(/\r?\n/);
+  const outLines = [];
+  const tableMap = {};
+  let i = 0;
+  let tableIndex = 0;
+
+  // Separator regex: matches lines like:
+  // | --- | :---: | ---: |
+  // or   --- | --- | :---:
+  const sepRe = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/;
+
+  while (i < lines.length) {
+    const line = lines[i] || '';
+    const next = lines[i + 1] || '';
+
+    if (line.indexOf('|') !== -1 && next && sepRe.test(next)) {
+      // We've found a table header + separator
+      const headerLine = line;
+      const sepLine = next;
+      const rows = [];
+      let j = i + 2;
+      while (j < lines.length) {
+        const candidate = lines[j] || '';
+        // Stop when we hit a blank line or a line that doesn't contain a pipe (not a table row)
+        if (!candidate.includes('|')) break;
+        rows.push(candidate);
+        j++;
+      }
+
+      // Build table HTML
+      const headers = splitCells(headerLine);
+      const aligns = parseAlignments(sepLine);
+      const bodyRows = rows.map(r => splitCells(r));
+
+      // normalize number of columns to headers length
+      const cols = headers.length;
+
+      let tableHtml = '<table>';
+      // thead
+      tableHtml += '<thead><tr>';
+      for (let c = 0; c < cols; c++) {
+        const h = headers[c] || '';
+        const align = aligns[c] || 'left';
+        const style = ` style="text-align:${align};"`;
+        tableHtml += `<th${style}>${inlineFormat(h)}</th>`;
+      }
+      tableHtml += '</tr></thead>';
+
+      // tbody
+      tableHtml += '<tbody>';
+      for (const r of bodyRows) {
+        tableHtml += '<tr>';
+        for (let c = 0; c < cols; c++) {
+          const cell = r[c] || '';
+          const align = aligns[c] || 'left';
+          const style = ` style="text-align:${align};"`;
+          tableHtml += `<td${style}>${inlineFormat(cell)}</td>`;
+        }
+        tableHtml += '</tr>';
+      }
+      tableHtml += '</tbody></table>';
+
+      const marker = `%%TABLE_BLOCK_${tableIndex}%%`;
+      tableMap[marker] = tableHtml;
+      outLines.push(marker);
+      tableIndex++;
+      i = j;
+      continue;
+    }
+
+    // Not a table header — keep line as-is
+    outLines.push(line);
+    i++;
+  }
+
+  const modifiedMd = outLines.join('\n');
+
+  // Render using existing renderer
+  const rendered = simpleMarkdownToHtml(modifiedMd);
+
+  // Replace escaped markers (the renderer will have escaped the marker text) with the actual table HTML.
+  // The marker appears escaped as escapeHtml(marker) in the output; perform replacement safely.
+  let final = rendered;
+  for (const marker in tableMap) {
+    const escapedMarker = escapeHtml(marker);
+    final = final.split(escapedMarker).join(tableMap[marker]);
+  }
+
+  return final;
+}
+
  // Public view for a published story: renders the aggregated markdown in a minimal page (no editor/menu).
  app.get('/published/:userId/:storyId', (req, res) => {
    try {

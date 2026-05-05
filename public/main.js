@@ -2071,6 +2071,187 @@ if (createTileBtn) {
     }
   }
 
+/* Helper: extract mermaid fenced blocks (```mermaid ... ```).
+   Returns an object { md, blocks } where md has the mermaid blocks replaced by unique tokens
+   and blocks is an array of { id, code, token } for later rendering.
+   - This regex is deliberately tolerant:
+     * accepts 3+ backticks
+     * allows optional language line extras (e.g. mermaid:foo)
+     * supports CRLF or LF line endings
+     * if no closing fence is present, captures until end-of-input as a fallback
+*/
+function extractMermaidBlocks(md) {
+  const blocks = [];
+  if (!md || typeof md !== 'string') return { md: md || '', blocks };
+
+  // Matches:
+  //   (optional leading newline) (```+) [spaces] mermaid [rest of line]\n
+  //   (capture code non-greedily)
+  //   (closing fence of same backtick length OR end-of-input)
+  const re = /(^|\r?\n)(```+)[ \t]*mermaid[^\r\n]*\r?\n([\s\S]*?)(?:\r?\n\2|$)/gi;
+
+  let out = '';
+  let lastIndex =0;
+  let idx = 0;
+  let m;
+  while ((m = re.exec(md)) !== null) {
+    // m.index is position of the full match start; m[1] contains the optional leading newline
+    const matchStart = m.index + (m[1] ? m[1].length : 0);
+    const matchEnd = re.lastIndex;
+    const code = m[3] || '';
+    const token = `%%MERMAID_${idx}%%`;
+    blocks.push({ id: String(idx), code, token });
+    out += md.slice(lastIndex, matchStart) + token;
+    lastIndex = matchEnd;
+    idx++;
+  }
+  out += md.slice(lastIndex);
+
+  return { md: out, blocks };
+}
+
+/* Helper: render mermaid placeholders found in the preview root.
+   Replaces each placeholder <div data-mermaid-id="..."> with the rendered SVG using mermaid API.
+   Falls back to showing the raw mermaid source in a <pre><code> block if mermaid isn't available
+   or rendering fails. */
+async function renderMermaidBlocksInPreview(root, blocks) {
+  if (!blocks || !blocks.length) return;
+
+  // If mermaid isn't loaded, show fallback code blocks
+  if (!window.mermaid) {
+    for (const b of blocks) {
+      const placeholder = root.querySelector(`[data-mermaid-id="${b.id}"]`);
+      if (!placeholder) continue;
+      const pre = document.createElement('pre');
+      const code = document.createElement('code');
+      code.className = 'language-mermaid';
+      code.textContent = b.code;
+      pre.appendChild(code);
+      placeholder.replaceWith(pre);
+    }
+    return;
+  }
+
+  // Ensure mermaid initialized (idempotent)
+  try {
+    if (typeof window.mermaid.initialize === 'function') {
+      window.mermaid.initialize({ startOnLoad: false });
+    }
+  } catch (e) {
+    console.warn('mermaid initialize failed', e);
+  }
+
+  // Replace placeholders with <div class="mermaid">...code...</div>
+  const mermaidDivs = [];
+  for (const b of blocks) {
+    const placeholder = root.querySelector(`[data-mermaid-id="${b.id}"]`);
+    if (!placeholder) continue;
+    try {
+      const mer = document.createElement('div');
+      mer.className = 'mermaid';
+      // put source as textContent so mermaid can parse it; preserve leading/trailing newlines
+      mer.textContent = (b.code || '').trim();
+      placeholder.replaceWith(mer);
+      mermaidDivs.push(mer);
+    } catch (err) {
+      // fallback: replace with pre/code showing source
+      const pre = document.createElement('pre');
+      const code = document.createElement('code');
+      code.className = 'language-mermaid';
+      code.textContent = b.code;
+      pre.appendChild(code);
+      try { placeholder.replaceWith(pre); } catch (e) {}
+    }
+  }
+
+  if (mermaidDivs.length === 0) return;
+
+  // Try multiple mermaid entry points depending on library version
+  try {
+    // Preferred: mermaid.init(selector, nodes) or mermaid.init(undefined, nodes)
+    if (typeof window.mermaid.init === 'function') {
+      try {
+        // mermaid.init can accept a selector or array-like of elements
+        window.mermaid.init(undefined, mermaidDivs);
+        return;
+      } catch (e) {
+        console.warn('mermaid.init failed', e);
+      }
+    }
+
+    // v8+ / runtime: mermaid.run/mermaid.contentLoaded
+    if (typeof window.mermaid.run === 'function') {
+      try {
+        // mermaid.run without args will initialize elements with class .mermaid
+        window.mermaid.run();
+        return;
+      } catch (e) {
+        console.warn('mermaid.run failed', e);
+      }
+    }
+
+    // As a last resort try mermaid.contentLoaded or init with selector
+    if (typeof window.mermaid.contentLoaded === 'function') {
+      try {
+        window.mermaid.contentLoaded();
+        return;
+      } catch (e) {
+        console.warn('mermaid.contentLoaded failed', e);
+      }
+    }
+
+    // If none of the above worked, attempt to call mermaidAPI.render for each element inside a safe try/catch
+    if (window.mermaid.mermaidAPI && typeof window.mermaid.mermaidAPI.render === 'function') {
+      for (const mer of mermaidDivs) {
+        try {
+          const code = mer.textContent || '';
+          const renderId = 'mermaid-svg-' + Date.now() + '-' + Math.floor(Math.random() * 10000);
+          const maybe = window.mermaid.mermaidAPI.render(renderId, code);
+          if (maybe && typeof maybe.then === 'function') {
+            // promise returned
+            maybe.then((svg) => {
+              const clean = String(svg).replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '');
+              try { mer.innerHTML = clean; } catch (e) { /* ignore */ }
+            }).catch((err) => {
+              console.warn('mermaidAPI.render(promise) failed', err);
+            });
+          } else if (typeof maybe === 'string') {
+            mer.innerHTML = String(maybe);
+          } else {
+            // try callback form
+            try {
+              window.mermaid.mermaidAPI.render(renderId, code, (svg) => {
+                try { mer.innerHTML = String(svg); } catch (e) { /* ignore */ }
+              });
+            } catch (e) {
+              console.warn('mermaidAPI.render fallback failed', e);
+            }
+          }
+        } catch (err) {
+          console.warn('mermaidAPI.render per-element failed', err);
+        }
+      }
+      return;
+    }
+  } catch (err) {
+    console.warn('mermaid rendering failed', err);
+  }
+
+  // final fallback: replace any remaining .mermaid divs with pre/code showing the source
+  for (const mer of mermaidDivs) {
+    try {
+      if (mer && mer.parentNode) {
+        const pre = document.createElement('pre');
+        const code = document.createElement('code');
+        code.className = 'language-mermaid';
+        code.textContent = mer.textContent || '';
+        pre.appendChild(code);
+        mer.parentNode.replaceChild(pre, mer);
+      }
+    } catch (e) { /* ignore */ }
+  }
+}
+
 /* Improved preview rendering: render markdown then wrap ALL entity occurrences (multi-match, multi-word, longest-first).
    NOTE: renderPreview now renders markdown even when no story is opened so the right pane always shows live preview. */
 function renderPreview() {
@@ -2079,25 +2260,79 @@ function renderPreview() {
     // overwrite the preview (it is rendered from tiles, not from the editor).
     if (state.currentView && state.currentView.type === 'full') return;
     const md = editor.value || '';
-    console.log('[debug] renderPreview invoked, md length=', md.length);
-    // log whether marked is present so we can diagnose why headings are not being converted
+    // extract mermaid fenced blocks and replace them with tokens before markdown -> HTML
+    const _mermaidExtract = extractMermaidBlocks(md || '');
+    const mermaidBlocks = (_mermaidExtract && Array.isArray(_mermaidExtract.blocks)) ? _mermaidExtract.blocks : [];
+    const mdForRender = (_mermaidExtract && typeof _mermaidExtract.md === 'string') ? _mermaidExtract.md : (md || '');
+    console.log('[debug] renderPreview invoked, md length=', (md || '').length);
     try { console.log('[debug] typeof marked =', typeof marked); } catch (e) { console.warn('cannot log marked type', e); }
-    // Use marked when available; otherwise fall back to the simple renderer.
-    // If marked isn't present, attempt to load it dynamically once and retry rendering.
+    // Use the simple renderer by default.
     let html = '';
-    // Always use the built-in simpleMarkdownToHtml renderer (we do not load marked).
-    html = simpleMarkdownToHtml(md || '');
-    // debug: log the actual HTML we will inject so we can inspect why headings appear as literal text
+    html = simpleMarkdownToHtml(mdForRender || '');
     try {
       console.log('[debug] rendered HTML preview (first 1000 chars):', (html || '').slice(0, 1000));
     } catch (e) {
       console.warn('Could not log rendered HTML', e);
     }
-    // try to set the rendered HTML. If for some reason it doesn't render (zero child nodes),
-    // fall back to showing the raw HTML as text so we can see what's produced.
+    // set rendered HTML
     preview.innerHTML = html || '<div class="empty-preview">[preview empty]</div>';
-    // if no nodes got inserted (some browsers / HTML combinations could cause empty rendering),
-    // show raw HTML so user can debug, and add a small debug attribute.
+    // If mermaid tokens were present, replace them with placeholder elements and render diagrams.
+    if (mermaidBlocks && mermaidBlocks.length > 0) {
+      console.log('[debug] mermaidBlocks count=', mermaidBlocks.length);
+      // First, detect tokens that were rendered inside <pre><code> or <code> elements by the markdown renderer.
+      // Replace the entire code/pre block with a placeholder so we don't leave raw fenced text visible.
+      let replacedCount = 0;
+      try {
+        const codeEls = Array.from(preview.querySelectorAll('pre code, code'));
+        for (const codeEl of codeEls) {
+          try {
+            const txt = codeEl.textContent || '';
+            for (const b of mermaidBlocks) {
+              if (txt.indexOf(b.token) !== -1) {
+                const placeholder = document.createElement('div');
+                placeholder.className = 'mermaid-placeholder';
+                placeholder.dataset.mermaidId = b.id;
+                placeholder.textContent = 'Rendering diagram...';
+                const toReplace = codeEl.closest('pre') || codeEl;
+                toReplace.replaceWith(placeholder);
+                replacedCount++;
+                break;
+              }
+            }
+          } catch (e) { /* ignore per-element errors */ }
+        }
+      } catch (e) { console.warn('mermaid: code element scan failed', e); }
+
+      // Next, walk remaining text nodes (outside code/pre) to find tokens and replace them.
+      walkTextNodes(preview, (textNode) => {
+        const txt = textNode.nodeValue;
+        if (!txt) return;
+        for (const b of mermaidBlocks) {
+          const token = b.token;
+          const idx = txt.indexOf(token);
+          if (idx === -1) continue;
+          const parent = textNode.parentNode;
+          const before = txt.slice(0, idx);
+          const after = txt.slice(idx + token.length);
+          if (before) parent.insertBefore(document.createTextNode(before), textNode);
+          const placeholder = document.createElement('div');
+          placeholder.className = 'mermaid-placeholder';
+          placeholder.dataset.mermaidId = b.id;
+          // minimal placeholder text while mermaid renders
+          placeholder.textContent = 'Rendering diagram...';
+          parent.insertBefore(placeholder, textNode);
+          if (after) parent.insertBefore(document.createTextNode(after), textNode);
+          parent.removeChild(textNode);
+          // break to avoid attempting to replace additional tokens in this text node (we rebuild nodes)
+          break;
+        }
+      });
+
+      console.log('[debug] mermaid placeholders replaced in DOM, code-pre replacements=', replacedCount);
+      // Render diagrams asynchronously so the DOM update can settle first.
+      setTimeout(() => { renderMermaidBlocksInPreview(preview, mermaidBlocks); }, 0);
+    }
+    // fallback if preview produced no child nodes
     if (!preview.childNodes || preview.childNodes.length === 0) {
       preview.textContent = html || '[no output]';
       preview.setAttribute('data-render-debug', 'raw-text-fallback');
@@ -4363,9 +4598,6 @@ function ensureMobileFooter(isAuth, isLocal) {
     });
     el.appendChild(backBtn);
     return;
-
-    // otherwise remove footer
-    if (el && el.parentNode) el.parentNode.removeChild(el);
   } catch (e) {
     console.warn('ensureMobileFooter failed', e);
   }

@@ -4671,7 +4671,7 @@ function ensureMobileFooter(isAuth, isLocal) {
             const a = document.createElement('a');
             const safeHref = String(pubRoute || '');
             if (/^(https?:\/\/|\/)/i.test(safeHref)) {
-              a.href = encodeURI(safeHref);
+              a.href = safeHref;
               a.target = '_blank';
               a.rel = 'noopener noreferrer';
               a.style.color = '#fff';

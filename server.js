@@ -1314,25 +1314,50 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
    }
  });
  
- // Minimal markdown -> HTML renderer used for published stories to match the editor preview
- function simpleMarkdownToHtml(md) {
-   if (!md) return '';
-   const lines = String(md).split(/\r?\n/);
-  let html = '';
-  let inList = false;
-  let inTaskList = false;
+  // Minimal markdown -> HTML renderer used for published stories to match the editor preview
+  function simpleMarkdownToHtml(md) {
+    if (!md) return '';
+    const lines = String(md).split(/\r?\n/);
+    let html = '';
+    let inList = false;
+    let inTaskList = false;
 
-   function escapeHtml(s) {
-     return String(s)
-       .replace(/&/g, '&amp;')
-       .replace(/</g, '&lt;')
-       .replace(/>/g, '&gt;');
-   }
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, '&')
+        .replace(/</g, '<')
+        .replace(/>/g, '>');
+    }
 
-   // iterate lines by index so we can group consecutive lines (useful for blockquotes)
-   for (let i = 0; i < lines.length; i++) {
-     const raw = lines[i];
-     const cleaned = raw.replace(/^[\uFEFF\u200B]+/, '');
+    // iterate lines by index so we can group consecutive lines (useful for blockquotes)
+    for (let i = 0; i < lines.length; i++) {
+      const raw = lines[i];
+      const cleaned = raw.replace(/^[\uFEFF\u200B]+/, '');
+
+      // fenced code support: ```lang
+      const fenceMatch = cleaned.match(/^```(\w+)?\s*$/);
+      if (fenceMatch) {
+        const lang = (fenceMatch[1] || '').toLowerCase();
+        // collect until closing fence (```), preserving intermediate blank lines
+        let j = i + 1;
+        const buf = [];
+        while (j < lines.length && !/^```/.test(lines[j])) {
+          buf.push(lines[j]);
+          j++;
+        }
+        // advance the outer loop to the closing fence line
+        i = j;
+        const blockContent = buf.join('\n');
+        const escaped = escapeHtml(blockContent);
+        if (lang === 'mermaid') {
+          // mermaid diagram container — content escaped to avoid raw HTML injection.
+          html += `<div class="mermaid">${escaped}</div>`;
+        } else {
+          const cls = lang ? ` class="language-${escapeHtml(lang)}"` : '';
+          html += `<pre><code${cls}>${escaped}</code></pre>`;
+        }
+        continue;
+      }
 
      // blockquote: collect consecutive lines starting with '>'
      if (/^\s*>\s?/.test(cleaned)) {
@@ -1489,7 +1514,7 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
      }
      const mobileFooterStylesPub = '<style>@media (max-width:640px){#mobileFooter{position:fixed;left:0;right:0;bottom:0;z-index:99999;display:flex;justify-content:center;align-items:center;padding:10px;background:#fff;border-top:1px solid rgba(0,0,0,0.06);box-shadow:0 -6px 18px rgba(0,0,0,0.08);font-weight:700}#mobileFooter a{color:#111;text-decoration:none}}@media (min-width:641px){#mobileFooter{display:none !important}}</style>';
  
-     const html = `<!doctype html>
+      const html = `<!doctype html>
   <html>
   <head>
   <meta charset="utf-8"/>
@@ -1499,6 +1524,8 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
   <style>
     body{font-family:Arial,Helvetica,sans-serif;max-width:900px;margin:24px auto;padding:16px}
     .story-content img{max-width:100%;height:auto}
+    /* allow horizontal scroll for wide mermaid diagrams */
+    .story-content .mermaid { overflow:auto; }
   </style>
   </head>
   <body>
@@ -1506,9 +1533,21 @@ app.post('/api/stories/:name/images', requireAuth, upload.single('file'), (req, 
   ${rendered}
   </main>
   ${mobileFooterStylesPub + (footerHtmlPub || '')}
+  <!-- Mermaid runtime for rendering diagrams in published stories -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>
+    try {
+      if (window.mermaid && typeof mermaid.initialize === 'function') {
+        mermaid.initialize({ startOnLoad: false });
+        document.addEventListener('DOMContentLoaded', function () {
+          try { mermaid.init(undefined, document.querySelectorAll('.mermaid')); } catch (e) { console.warn('mermaid init failed', e); }
+        });
+      }
+    } catch (e) { console.warn('mermaid script error', e); }
+  </script>
   </body>
   </html>`;
-     res.send(html);
+  res.send(html);
    } catch (err) {
      res.status(500).send('failed to render published story');
    }

@@ -2915,6 +2915,22 @@ editor.addEventListener('contextmenu', (ev) => {
 
   if (btnHl) customContextEl.appendChild(btnHl);
   customContextEl.appendChild(btnUpload);
+  const btnInsertTable = document.createElement('button');
+  btnInsertTable.textContent = 'Insert table';
+  btnInsertTable.addEventListener('click', (ev) => {
+    // determine insertion indices from the saved right-click selection, falling back to current selection
+    const s = (lastEditorSelection && typeof lastEditorSelection.start === 'number') ? lastEditorSelection.start : editor.selectionStart;
+    const epos = (lastEditorSelection && typeof lastEditorSelection.end === 'number') ? lastEditorSelection.end : editor.selectionEnd;
+    const before = editor.value.slice(0, s);
+    const after = editor.value.slice(epos);
+    const tableMd = '\n| A | B |\n|---|---|\n| x | y |\n| z | t |\n\n';
+    editor.value = before + tableMd + after;
+    try { renderPreview(); } catch (e) {}
+    try { if (typeof scheduleAutoSave === 'function') scheduleAutoSave(200); else if (typeof saveMainText === 'function') saveMainText(); } catch (e) {}
+    try { editor.focus(); editor.setSelectionRange(before.length + tableMd.length, before.length + tableMd.length); } catch (e) {}
+    if (customContextEl) customContextEl.remove();
+  });
+  customContextEl.appendChild(btnInsertTable);
   // insert link button into the editor's custom context menu
     const btnLink = document.createElement('button');
     if (selected && selected.length > 0) {

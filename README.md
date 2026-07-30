@@ -4,6 +4,8 @@
 
 A small editor for story writers, inspired by **Ghostwriter**. Because I felt **Scrivener** and **Manuskript** too feature-rich for my taste.
 
+> 🚨 I made a leaner / better version of that editor, check it out: [NeoWriter](https://github.com/valvolt/neowriter)
+
 ## Test it online
 - you will need to register a user
 - you have a small quota
